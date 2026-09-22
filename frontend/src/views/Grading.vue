@@ -8,7 +8,12 @@
     <div class="toolbar">
       <span>选择答题记录：</span>
       <el-select v-model="attemptId" placeholder="请选择" style="width: 320px" @change="loadDetail">
-        <el-option v-for="a in attempts" :key="a.attempt_id" :label="`#${a.attempt_id} 客观分 ${a.objective_score}`" :value="a.attempt_id" />
+        <el-option
+          v-for="a in attempts"
+          :key="a.attempt_id"
+          :label="`#${a.attempt_id} ${a.kind === 'makeup' ? '[补考]' : '[原始]'} 客观分 ${a.objective_score}`"
+          :value="a.attempt_id"
+        />
       </el-select>
     </div>
 

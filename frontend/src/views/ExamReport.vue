@@ -6,9 +6,20 @@
     </div>
 
     <template v-if="report">
+      <el-alert
+        v-if="!report.is_effective"
+        type="info"
+        :closable="false"
+        style="margin-bottom: 16px"
+        :title="`本次为${report.kind === 'makeup' ? '补考' : '原始'}记录，有效成绩取两次考试最高分 ${report.effective_score} 分`"
+      />
       <el-descriptions :column="3" border>
         <el-descriptions-item label="考试">{{ report.exam_title }}</el-descriptions-item>
-        <el-descriptions-item label="总分">{{ report.total_score }}</el-descriptions-item>
+        <el-descriptions-item label="记录类型">
+          <el-tag :type="report.kind === 'makeup' ? 'warning' : 'info'">{{ report.kind === 'makeup' ? '补考' : '原始' }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="本次总分">{{ report.total_score }}</el-descriptions-item>
+        <el-descriptions-item label="有效成绩">{{ report.effective_score }}</el-descriptions-item>
         <el-descriptions-item label="客观题得分">{{ report.objective_score }}</el-descriptions-item>
         <el-descriptions-item label="主观题得分">{{ report.subjective_score }}</el-descriptions-item>
         <el-descriptions-item label="客观题正确率">{{ report.accuracy }}%</el-descriptions-item>

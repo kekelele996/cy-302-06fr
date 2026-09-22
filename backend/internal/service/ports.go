@@ -48,6 +48,9 @@ type AttemptRepo interface {
 	FindInProgressAttempt(ctx context.Context, examID, studentID uint) (*model.ExamAttempt, error)
 	ListAttemptsByStudent(ctx context.Context, studentID, examID uint, page, pageSize int) ([]model.ExamAttempt, int64, error)
 	ListAttemptsByExam(ctx context.Context, examID uint) ([]model.ExamAttempt, error)
+	ListAttemptsByExamAndStudent(ctx context.Context, examID, studentID uint) ([]model.ExamAttempt, error)
+	ListStudentAttemptsForExams(ctx context.Context, studentID uint, examIDs []uint) ([]model.ExamAttempt, error)
+	MarkAbsentAttempts(ctx context.Context, examID uint) (int64, error)
 }
 
 // AnswerRepo is the answer persistence contract.
@@ -60,8 +63,21 @@ type AnswerRepo interface {
 type WrongRepo interface {
 	UpsertWrongQuestion(ctx context.Context, w *model.WrongQuestion) error
 	ListWrongQuestions(ctx context.Context, studentID uint, knowledgePoint string, page, pageSize int) ([]model.WrongQuestion, int64, error)
+	ListWrongQuestionsByAttempts(ctx context.Context, studentID uint, attemptIDs []uint) ([]model.WrongQuestion, error)
+	ListWrongQuestionsByQuestions(ctx context.Context, studentID uint, questionIDs []uint) ([]model.WrongQuestion, error)
 	DeleteWrongQuestion(ctx context.Context, id, studentID uint) error
 	MarkWrongQuestionResolved(ctx context.Context, id, studentID uint) error
+}
+
+// MakeupRepo is the makeup-request persistence contract.
+type MakeupRepo interface {
+	CreateMakeupRequest(ctx context.Context, req *model.MakeupRequest) error
+	FindMakeupRequest(ctx context.Context, examID, studentID uint) (*model.MakeupRequest, error)
+	FindMakeupRequestByID(ctx context.Context, id uint) (*model.MakeupRequest, error)
+	ListMakeupRequestsByExam(ctx context.Context, examID uint) ([]model.MakeupRequest, error)
+	ReapplyMakeupRequest(ctx context.Context, id uint, reason string) error
+	ApproveMakeupRequest(ctx context.Context, id, reviewerID uint, attempt *model.ExamAttempt) error
+	RejectMakeupRequest(ctx context.Context, id, reviewerID uint) error
 }
 
 // StatsRepo is the minimal persistence contract used by statistics queries.

@@ -20,6 +20,7 @@
         <template #default="{ row }">
           <template v-if="isStudent">
             <el-button v-if="row.status === 'published'" type="primary" size="small" @click="$router.push(`/exam/${row.id}/take`)">开始考试</el-button>
+            <el-button v-if="row.status === 'closed'" type="warning" size="small" @click="openMakeup(row)">补考</el-button>
           </template>
           <template v-else>
             <el-button size="small" @click="viewQuestions(row)">题目</el-button>
@@ -27,6 +28,7 @@
             <el-button v-if="row.status === 'published'" type="warning" size="small" @click="closeExam(row)">关闭</el-button>
             <el-button size="small" @click="viewStats(row)">统计</el-button>
             <el-button size="small" type="info" @click="$router.push(`/grading/${row.id}`)">批改</el-button>
+            <el-button size="small" type="warning" @click="openMakeupReview(row)">补考审核</el-button>
             <el-button size="small" type="danger" @click="removeExam(row)">删除</el-button>
           </template>
         </template>
@@ -98,28 +100,104 @@
         <el-descriptions :column="3" border>
           <el-descriptions-item label="考试">{{ stats.exam_title }}</el-descriptions-item>
           <el-descriptions-item label="参与人数">{{ stats.participant_count }}</el-descriptions-item>
-          <el-descriptions-item label="平均分">{{ stats.average_score }}</el-descriptions-item>
-          <el-descriptions-item label="最高分">{{ stats.highest_score }}</el-descriptions-item>
-          <el-descriptions-item label="最低分">{{ stats.lowest_score }}</el-descriptions-item>
+          <el-descriptions-item label="提交记录数">{{ stats.record_count }}</el-descriptions-item>
+          <el-descriptions-item label="缺考人数">{{ stats.absent_count }}</el-descriptions-item>
+          <el-descriptions-item label="补考提交数">{{ stats.makeup_count }}</el-descriptions-item>
           <el-descriptions-item label="及格人数">{{ stats.pass_count }}</el-descriptions-item>
+          <el-descriptions-item label="有效平均分">{{ stats.average_score }}</el-descriptions-item>
+          <el-descriptions-item label="原始记录平均分">{{ stats.raw_average_score }}</el-descriptions-item>
+          <el-descriptions-item label="最高/最低">{{ stats.highest_score }} / {{ stats.lowest_score }}</el-descriptions-item>
         </el-descriptions>
+        <el-alert type="info" :closable="false" style="margin-top: 12px" title="排名与分布按每位学生的有效成绩（原始与补考最高分）计算" />
         <el-table :data="stats.ranking" border style="margin-top: 12px">
           <el-table-column prop="rank" label="排名" width="80" />
           <el-table-column prop="student_name" label="姓名" />
           <el-table-column prop="student_username" label="用户名" />
-          <el-table-column prop="total_score" label="总分" width="100" />
+          <el-table-column prop="total_score" label="有效成绩" width="100" />
+          <el-table-column label="成绩来源" width="100">
+            <template #default="{ row }">
+              <el-tag :type="row.source === 'makeup' ? 'warning' : 'info'" size="small">{{ row.source === 'makeup' ? '补考' : '原始' }}</el-tag>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
+    </el-dialog>
+
+    <el-dialog v-model="makeupVisible" title="补考申请" width="520px">
+      <div v-if="makeupStatus" v-loading="makeupLoading">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="达标分数">{{ makeupStatus.pass_score }} 分（总分 60%）</el-descriptions-item>
+          <el-descriptions-item label="当前有效成绩">
+            <span v-if="makeupStatus.effective_score !== null && makeupStatus.effective_score !== undefined">{{ makeupStatus.effective_score }} 分</span>
+            <span v-else>暂无成绩</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="makeupStatus.can_apply ? 'success' : 'info'">{{ makeupStatus.message }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="makeupStatus.request" label="申请状态">
+            <el-tag :type="makeupRequestTag[makeupStatus.request.status]">{{ makeupRequestLabels[makeupStatus.request.status] }}</el-tag>
+            <span v-if="makeupStatus.request.reviewed_at" style="margin-left: 8px; color: #909399; font-size: 12px">
+              {{ formatTime(makeupStatus.request.reviewed_at) }}
+            </span>
+          </el-descriptions-item>
+        </el-descriptions>
+        <template v-if="makeupStatus.can_apply">
+          <el-input
+            v-model="makeupReason"
+            type="textarea"
+            :rows="3"
+            maxlength="255"
+            placeholder="申请理由（选填）"
+            style="margin-top: 16px"
+          />
+          <el-button type="primary" style="margin-top: 12px" :loading="applying" @click="applyMakeup">提交补考申请</el-button>
+        </template>
+        <el-button
+          v-if="makeupStatus.makeup_status === 'in_progress'"
+          type="warning"
+          style="margin-top: 12px"
+          @click="enterMakeup"
+        >进入补考</el-button>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="reviewVisible" :title="`补考审核 - ${reviewExam?.title || ''}`" width="860px">
+      <el-table :data="reviewRows" v-loading="reviewLoading" border>
+        <el-table-column prop="id" label="ID" width="70" />
+        <el-table-column prop="student_name" label="姓名" width="110" />
+        <el-table-column prop="student_username" label="用户名" width="120" />
+        <el-table-column prop="reason" label="申请理由" min-width="160" show-overflow-tooltip />
+        <el-table-column label="状态" width="90">
+          <template #default="{ row }">
+            <el-tag :type="makeupRequestTag[row.status as MakeupRequestStatus]">{{ makeupRequestLabels[row.status as MakeupRequestStatus] }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="申请时间" width="160">
+          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="140" fixed="right">
+          <template #default="{ row }">
+            <template v-if="row.status === 'pending'">
+              <el-button size="small" type="success" @click="approveRequest(row)">批准</el-button>
+              <el-button size="small" type="danger" @click="rejectRequest(row)">拒绝</el-button>
+            </template>
+            <span v-else style="color: #909399">已处理</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!reviewLoading && reviewRows.length === 0" description="暂无补考申请" />
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { examApi } from '../api'
+import { examApi, makeupApi } from '../api'
 import { useAuthStore } from '../stores/auth'
-import type { Exam, PaperQuestionConfig, ExamStatResponse } from '../types'
+import type { Exam, PaperQuestionConfig, ExamStatResponse, MakeupRequestItem, MakeupRequestStatus, MakeupStatus } from '../types'
 
 const typeLabels: Record<string, string> = {
   single: '单选题',
@@ -133,6 +211,7 @@ const statusLabels: Record<string, string> = { draft: '草稿', published: '已�
 const statusTag: Record<string, string> = { draft: 'info', published: 'success', closed: 'warning' }
 
 const auth = useAuthStore()
+const router = useRouter()
 const isStudent = computed(() => auth.role === 'student')
 const isStaff = computed(() => auth.role === 'admin' || auth.role === 'teacher')
 
@@ -216,6 +295,100 @@ async function viewQuestions(row: Exam) {
 async function viewStats(row: Exam) {
   stats.value = await examApi.stats(row.id)
   statsVisible.value = true
+}
+
+const makeupVisible = ref(false)
+const makeupLoading = ref(false)
+const applying = ref(false)
+const makeupExam = ref<Exam | null>(null)
+const makeupStatus = ref<MakeupStatus | null>(null)
+const makeupReason = ref('')
+
+const makeupRequestLabels: Record<MakeupRequestStatus, string> = {
+  pending: '待审核',
+  approved: '已批准',
+  rejected: '已拒绝'
+}
+const makeupRequestTag: Record<MakeupRequestStatus, string> = {
+  pending: 'warning',
+  approved: 'success',
+  rejected: 'danger'
+}
+
+function formatTime(v?: string | null) {
+  return v ? dayjs(v).format('YYYY-MM-DD HH:mm:ss') : '-'
+}
+
+async function loadMakeupStatus() {
+  if (!makeupExam.value) return
+  makeupLoading.value = true
+  try {
+    makeupStatus.value = await makeupApi.status(makeupExam.value.id)
+  } finally {
+    makeupLoading.value = false
+  }
+}
+
+async function openMakeup(row: Exam) {
+  makeupExam.value = row
+  makeupReason.value = ''
+  makeupStatus.value = null
+  makeupVisible.value = true
+  await loadMakeupStatus()
+}
+
+async function applyMakeup() {
+  if (!makeupExam.value) return
+  applying.value = true
+  try {
+    await makeupApi.apply(makeupExam.value.id, makeupReason.value)
+    ElMessage.success('补考申请已提交，请等待教师审核')
+    await loadMakeupStatus()
+  } finally {
+    applying.value = false
+  }
+}
+
+function enterMakeup() {
+  if (!makeupExam.value) return
+  makeupVisible.value = false
+  router.push(`/exam/${makeupExam.value.id}/take`)
+}
+
+const reviewVisible = ref(false)
+const reviewLoading = ref(false)
+const reviewExam = ref<Exam | null>(null)
+const reviewRows = ref<MakeupRequestItem[]>([])
+
+async function loadReviewRows() {
+  if (!reviewExam.value) return
+  reviewLoading.value = true
+  try {
+    reviewRows.value = await makeupApi.listByExam(reviewExam.value.id)
+  } finally {
+    reviewLoading.value = false
+  }
+}
+
+async function openMakeupReview(row: Exam) {
+  reviewExam.value = row
+  reviewRows.value = []
+  reviewVisible.value = true
+  await loadReviewRows()
+}
+
+async function approveRequest(row: MakeupRequestItem) {
+  await ElMessageBox.confirm(`确认批准 ${row.student_name || row.student_username} 的补考申请？批准后将生成补考记录。`, '提示', { type: 'warning' })
+  await makeupApi.approve(row.id)
+  ElMessage.success('已批准补考')
+  await loadReviewRows()
+}
+
+async function rejectRequest(row: MakeupRequestItem) {
+  await ElMessageBox.confirm(`确认拒绝 ${row.student_name || row.student_username} 的补考申请？`, '提示', { type: 'warning' })
+  await makeupApi.reject(row.id)
+  ElMessage.success('已拒绝申请')
+  await loadReviewRows()
 }
 
 async function load() {

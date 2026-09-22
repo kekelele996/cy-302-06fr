@@ -193,3 +193,86 @@ paths:
       responses:
         '201':
           description: 创建成功
+  /api/v1/exams/{id}/makeup:
+    get:
+      summary: 查询当前学生的补考资格与申请状态
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 返回 eligible、can_apply、message、effective_score 及最近一条申请
+    post:
+      summary: 申请补考（缺考或低于总分 60% 可申请一次）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '201':
+          description: 申请成功，进入待审核
+        '409':
+          description: 重复申请、待审核中或补考进行中
+  /api/v1/exams/{id}/makeup-requests:
+    get:
+      summary: 教师查看某场考试的补考申请列表
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 申请列表
+  /api/v1/makeup-requests/{id}/approve:
+    post:
+      summary: 批准补考申请并生成独立补考记录（并发批准只成功一次）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 已批准
+        '409':
+          description: 申请已被处理
+  /api/v1/makeup-requests/{id}/reject:
+    post:
+      summary: 拒绝补考申请
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 已拒绝
+        '409':
+          description: 申请已被处理

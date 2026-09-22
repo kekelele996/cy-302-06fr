@@ -34,7 +34,24 @@ const (
 const (
 	AttemptInProgress = "in_progress"
 	AttemptSubmitted  = "submitted"
+	AttemptAbsent     = "absent"
 )
+
+// Attempt kinds
+const (
+	AttemptKindOriginal = "original"
+	AttemptKindMakeup   = "makeup"
+)
+
+// Makeup request statuses
+const (
+	MakeupPending  = "pending"
+	MakeupApproved = "approved"
+	MakeupRejected = "rejected"
+)
+
+// MakeupPassRatio is the pass threshold ratio of the exam total score.
+const MakeupPassRatio = 0.6
 
 // Wrong question statuses
 const (

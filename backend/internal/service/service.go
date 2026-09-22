@@ -18,6 +18,21 @@ var (
 	ErrValidation   = errors.New("validation failed")
 )
 
+// ConflictError is a 409 conflict with a user-facing message.
+type ConflictError struct {
+	Message string
+}
+
+// Error returns the user-facing message.
+func (e *ConflictError) Error() string {
+	return e.Message
+}
+
+// Is makes ConflictError match ErrConflict via errors.Is.
+func (e *ConflictError) Is(target error) bool {
+	return target == ErrConflict
+}
+
 // baseService provides logger access for all services.
 type baseService struct {
 	logger *slog.Logger

@@ -46,10 +46,11 @@ func main() {
 	authService := service.NewAuthService(repo, cfg, logger)
 	userService := service.NewUserService(repo, logger)
 	questionService := service.NewQuestionService(repo, logger)
-	examService := service.NewExamService(repo, repo, logger)
+	examService := service.NewExamService(repo, repo, repo, logger)
 	attemptService := service.NewAttemptService(repo, repo, repo, repo, repo, logger)
 	statsService := service.NewStatsService(repo, logger)
 	wrongService := service.NewWrongQuestionService(repo, repo, logger)
+	makeupService := service.NewMakeupService(repo, repo, repo, repo, repo, logger)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -58,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	server := handler.NewServer(logger, authService, userService, questionService, examService, attemptService, statsService, wrongService)
+	server := handler.NewServer(logger, authService, userService, questionService, examService, attemptService, statsService, wrongService, makeupService)
 	engine := router.New(server, middleware.Auth(authService))
 
 	srv := &http.Server{

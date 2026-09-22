@@ -102,9 +102,11 @@ export interface AttemptSummary {
   attempt_id: number
   exam_id: number
   exam_title: string
-  status: 'in_progress' | 'submitted'
+  kind: 'original' | 'makeup'
+  status: 'in_progress' | 'submitted' | 'absent'
   objective_score: number
   total_score: number
+  effective_score?: number | null
   started_at: string
   submitted_at?: string | null
 }
@@ -128,6 +130,7 @@ export interface AttemptDetail {
   attempt_id: number
   exam_id: number
   exam_title: string
+  kind: 'original' | 'makeup'
   status: string
   objective_score: number
   total_score: number
@@ -149,7 +152,10 @@ export interface ReportResponse {
   attempt_id: number
   exam_id: number
   exam_title: string
+  kind: 'original' | 'makeup'
   total_score: number
+  effective_score: number
+  is_effective: boolean
   objective_score: number
   subjective_score: number
   accuracy: number
@@ -164,6 +170,7 @@ export interface RankItem {
   student_name: string
   student_username: string
   total_score: number
+  source: 'original' | 'makeup'
   submitted_at?: string | null
 }
 
@@ -171,12 +178,45 @@ export interface ExamStatResponse {
   exam_id: number
   exam_title: string
   participant_count: number
+  record_count: number
+  absent_count: number
+  makeup_count: number
   average_score: number
+  raw_average_score: number
   highest_score: number
   lowest_score: number
   pass_count: number
   score_distribution: { label: string; count: number }[]
   ranking: RankItem[]
+}
+
+export type MakeupRequestStatus = 'pending' | 'approved' | 'rejected'
+
+export interface MakeupRequestItem {
+  id: number
+  exam_id: number
+  exam_title?: string
+  student_id: number
+  student_name?: string
+  student_username?: string
+  reason: string
+  status: MakeupRequestStatus
+  reviewed_by: number
+  reviewed_at?: string | null
+  attempt_id: number
+  created_at: string
+}
+
+export interface MakeupStatus {
+  exam_id: number
+  pass_score: number
+  effective_score?: number | null
+  eligible: boolean
+  can_apply: boolean
+  message: string
+  makeup_attempt_id?: number
+  makeup_status?: string
+  request?: MakeupRequestItem | null
 }
 
 export interface OverviewResponse {

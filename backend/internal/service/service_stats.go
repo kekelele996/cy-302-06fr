@@ -48,7 +48,9 @@ func (s *StatsService) Overview(ctx context.Context) (*dto.OverviewResponse, err
 	}, nil
 }
 
-// ExamStats returns score statistics and ranking for one exam.
+// ExamStats returns score statistics and ranking for one exam. Headline
+// numbers use effective scores (best submitted attempt per student); raw
+// counters keep original records distinguishable.
 func (s *StatsService) ExamStats(ctx context.Context, role string, userID, examID uint) (*dto.ExamStatResponse, error) {
 	exam, err := s.repo.FindExamByID(ctx, examID)
 	if err != nil {
@@ -62,44 +64,67 @@ func (s *StatsService) ExamStats(ctx context.Context, role string, userID, examI
 		return nil, fmt.Errorf("list attempts by exam: %w", err)
 	}
 
-	submitted := make([]model.ExamAttempt, 0, len(attempts))
+	absentCount := 0
+	makeupCount := 0
+	rawTotal := 0.0
+	rawCount := 0
+	bestByStudent := make(map[uint]model.ExamAttempt, len(attempts))
 	for _, a := range attempts {
-		if a.Status == constants.AttemptSubmitted {
-			submitted = append(submitted, a)
+		switch a.Status {
+		case constants.AttemptAbsent:
+			absentCount++
+		case constants.AttemptSubmitted:
+			rawCount++
+			rawTotal += a.TotalScore
+			if a.Kind == constants.AttemptKindMakeup {
+				makeupCount++
+			}
+			current, ok := bestByStudent[a.StudentID]
+			if !ok || a.TotalScore > current.TotalScore {
+				bestByStudent[a.StudentID] = a
+			}
 		}
 	}
-	sort.Slice(submitted, func(i, j int) bool {
-		if submitted[i].TotalScore != submitted[j].TotalScore {
-			return submitted[i].TotalScore > submitted[j].TotalScore
+	effective := make([]model.ExamAttempt, 0, len(bestByStudent))
+	for _, a := range bestByStudent {
+		effective = append(effective, a)
+	}
+	sort.Slice(effective, func(i, j int) bool {
+		if effective[i].TotalScore != effective[j].TotalScore {
+			return effective[i].TotalScore > effective[j].TotalScore
 		}
-		if submitted[i].SubmittedAt != nil && submitted[j].SubmittedAt != nil {
-			return submitted[i].SubmittedAt.Before(*submitted[j].SubmittedAt)
+		if effective[i].SubmittedAt != nil && effective[j].SubmittedAt != nil {
+			return effective[i].SubmittedAt.Before(*effective[j].SubmittedAt)
 		}
-		return submitted[i].ID < submitted[j].ID
+		return effective[i].ID < effective[j].ID
 	})
 
 	total := 0.0
 	highest := 0.0
 	lowest := 0.0
 	passCount := 0
-	if len(submitted) > 0 {
-		highest = submitted[0].TotalScore
-		lowest = submitted[len(submitted)-1].TotalScore
+	if len(effective) > 0 {
+		highest = effective[0].TotalScore
+		lowest = effective[len(effective)-1].TotalScore
 	}
-	for _, a := range submitted {
+	for _, a := range effective {
 		total += a.TotalScore
 		if exam.TotalScore > 0 && a.TotalScore >= exam.TotalScore*0.6 {
 			passCount++
 		}
 	}
 	average := 0.0
-	if len(submitted) > 0 {
-		average = total / float64(len(submitted))
+	if len(effective) > 0 {
+		average = total / float64(len(effective))
+	}
+	rawAverage := 0.0
+	if rawCount > 0 {
+		rawAverage = rawTotal / float64(rawCount)
 	}
 
-	buckets := buildScoreBuckets(submitted, exam.TotalScore)
-	ranking := make([]dto.RankItem, 0, len(submitted))
-	for i, a := range submitted {
+	buckets := buildScoreBuckets(effective, exam.TotalScore)
+	ranking := make([]dto.RankItem, 0, len(effective))
+	for i, a := range effective {
 		name := ""
 		username := ""
 		if user, userErr := s.repo.FindUserByID(ctx, a.StudentID); userErr == nil {
@@ -111,6 +136,7 @@ func (s *StatsService) ExamStats(ctx context.Context, role string, userID, examI
 			StudentName:     name,
 			StudentUsername: username,
 			TotalScore:      a.TotalScore,
+			Source:          a.Kind,
 			SubmittedAt:     a.SubmittedAt,
 		})
 	}
@@ -118,8 +144,12 @@ func (s *StatsService) ExamStats(ctx context.Context, role string, userID, examI
 	return &dto.ExamStatResponse{
 		ExamID:            exam.ID,
 		ExamTitle:         exam.Title,
-		ParticipantCount:  len(submitted),
+		ParticipantCount:  len(effective),
+		RecordCount:       rawCount,
+		AbsentCount:       absentCount,
+		MakeupCount:       makeupCount,
 		AverageScore:      round2(average),
+		RawAverageScore:   round2(rawAverage),
 		HighestScore:      highest,
 		LowestScore:       lowest,
 		PassCount:         passCount,

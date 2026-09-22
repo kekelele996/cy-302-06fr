@@ -52,6 +52,15 @@ func (s *AttemptService) Start(ctx context.Context, studentID, examID uint) (*dt
 	if err != nil {
 		return nil, err
 	}
+
+	// Resume any unfinished attempt first: an approved makeup attempt stays
+	// resumable even after the exam itself is closed.
+	if existing, err := s.attemptRepo.FindInProgressAttempt(ctx, examID, studentID); err == nil {
+		return s.startResponse(ctx, existing, exam)
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return nil, fmt.Errorf("find in progress attempt: %w", err)
+	}
+
 	if exam.Status != constants.ExamPublished {
 		return nil, ErrForbidden
 	}
@@ -63,12 +72,6 @@ func (s *AttemptService) Start(ctx context.Context, studentID, examID uint) (*dt
 		return nil, fmt.Errorf("%w: 考试已结束", ErrValidation)
 	}
 
-	if existing, err := s.attemptRepo.FindInProgressAttempt(ctx, examID, studentID); err == nil {
-		return s.startResponse(ctx, existing, exam)
-	} else if !errors.Is(err, repository.ErrNotFound) {
-		return nil, fmt.Errorf("find in progress attempt: %w", err)
-	}
-
 	items, err := s.examRepo.ListExamQuestions(ctx, examID)
 	if err != nil {
 		return nil, err
@@ -76,39 +79,11 @@ func (s *AttemptService) Start(ctx context.Context, studentID, examID uint) (*dt
 	if len(items) == 0 {
 		return nil, fmt.Errorf("%w: 试卷没有题目", ErrValidation)
 	}
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	shuffle(items, rng)
-
-	order := make([]uint, 0, len(items))
-	optionOrder := map[uint][]string{}
-	for _, it := range items {
-		order = append(order, it.ID)
-		q, ok := s.findQuestion(ctx, it.QuestionID)
-		if !ok {
-			continue
-		}
-		if isChoiceType(q.Type) {
-			options, _ := unmarshalOptions(q.Options)
-			shuffle(options, rng)
-			keys := make([]string, 0, len(options))
-			for _, opt := range options {
-				keys = append(keys, opt.Key)
-			}
-			optionOrder[it.ID] = keys
-		}
+	questions, err := s.paperQuestions(ctx, items)
+	if err != nil {
+		return nil, err
 	}
-
-	orderRaw, _ := json.Marshal(order)
-	optionRaw, _ := json.Marshal(optionOrder)
-	attempt := &model.ExamAttempt{
-		ExamID:        examID,
-		StudentID:     studentID,
-		Status:        constants.AttemptInProgress,
-		StartedAt:     now,
-		Deadline:      now.Add(time.Duration(exam.DurationMinutes) * time.Minute),
-		QuestionOrder: string(orderRaw),
-		OptionOrder:   string(optionRaw),
-	}
+	attempt := newShuffledAttempt(exam, studentID, items, questions, constants.AttemptKindOriginal, 1, now)
 	if err := s.attemptRepo.CreateAttempt(ctx, attempt); err != nil {
 		return nil, err
 	}
@@ -220,6 +195,7 @@ func (s *AttemptService) Submit(ctx context.Context, studentID, attemptID uint) 
 				wrongItems = append(wrongItems, &model.WrongQuestion{
 					StudentID:      studentID,
 					QuestionID:     q.ID,
+					AttemptID:      attemptID,
 					KnowledgePoint: q.KnowledgePoint,
 					WrongCount:     1,
 					LastWrongAt:    now,
@@ -253,6 +229,11 @@ func (s *AttemptService) Submit(ctx context.Context, studentID, attemptID uint) 
 		if err := s.wrongRepo.UpsertWrongQuestion(ctx, w); err != nil {
 			return fmt.Errorf("upsert wrong question: %w", err)
 		}
+	}
+	// The wrong book mirrors the effective (highest scoring) attempt: drop
+	// exam-sourced records that are no longer wrong in the effective attempt.
+	if err := s.reconcileWrongBook(ctx, attempt.ExamID, studentID); err != nil {
+		return fmt.Errorf("reconcile wrong book: %w", err)
 	}
 	return nil
 }
@@ -328,6 +309,11 @@ func (s *AttemptService) Grade(ctx context.Context, teacherID uint, role string,
 	if err := s.attemptRepo.UpdateAttempt(ctx, attempt); err != nil {
 		return fmt.Errorf("update attempt: %w", err)
 	}
+	// Grading can flip which attempt is the effective one, so keep the wrong
+	// book aligned with the effective attempt.
+	if err := s.reconcileWrongBook(ctx, attempt.ExamID, attempt.StudentID); err != nil {
+		return fmt.Errorf("reconcile wrong book: %w", err)
+	}
 	return nil
 }
 
@@ -356,6 +342,7 @@ func (s *AttemptService) Detail(ctx context.Context, role string, userID, attemp
 		AttemptID:      attempt.ID,
 		ExamID:         exam.ID,
 		ExamTitle:      exam.Title,
+		Kind:           attempt.Kind,
 		Status:         attempt.Status,
 		ObjectiveScore: attempt.ObjectiveScore,
 		TotalScore:     attempt.TotalScore,
@@ -372,6 +359,26 @@ func (s *AttemptService) List(ctx context.Context, studentID uint, query dto.Att
 	if err != nil {
 		return dto.PageResult{}, fmt.Errorf("list attempts: %w", err)
 	}
+	examIDs := make([]uint, 0, len(attempts))
+	seen := make(map[uint]bool, len(attempts))
+	for i := range attempts {
+		if !seen[attempts[i].ExamID] {
+			seen[attempts[i].ExamID] = true
+			examIDs = append(examIDs, attempts[i].ExamID)
+		}
+	}
+	effectiveByExam := map[uint]float64{}
+	if all, allErr := s.attemptRepo.ListStudentAttemptsForExams(ctx, studentID, examIDs); allErr == nil {
+		byExam := make(map[uint][]model.ExamAttempt, len(examIDs))
+		for i := range all {
+			byExam[all[i].ExamID] = append(byExam[all[i].ExamID], all[i])
+		}
+		for examID, group := range byExam {
+			if best := bestSubmittedAttempt(group); best != nil {
+				effectiveByExam[examID] = best.TotalScore
+			}
+		}
+	}
 	page, pageSize := normalizePage(query.Page, query.PageSize)
 	items := make([]dto.AttemptSummary, 0, len(attempts))
 	for i := range attempts {
@@ -380,16 +387,21 @@ func (s *AttemptService) List(ctx context.Context, studentID uint, query dto.Att
 		if examErr == nil {
 			title = exam.Title
 		}
-		items = append(items, dto.AttemptSummary{
+		summary := dto.AttemptSummary{
 			AttemptID:      attempts[i].ID,
 			ExamID:         attempts[i].ExamID,
 			ExamTitle:      title,
+			Kind:           attempts[i].Kind,
 			Status:         attempts[i].Status,
 			ObjectiveScore: attempts[i].ObjectiveScore,
 			TotalScore:     attempts[i].TotalScore,
 			StartedAt:      attempts[i].StartedAt,
 			SubmittedAt:    attempts[i].SubmittedAt,
-		})
+		}
+		if score, ok := effectiveByExam[attempts[i].ExamID]; ok {
+			summary.EffectiveScore = &score
+		}
+		items = append(items, summary)
 	}
 	return dto.PageResult{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
@@ -485,12 +497,26 @@ func (s *AttemptService) Report(ctx context.Context, role string, userID, attemp
 	}
 	rank, participants := s.ranking(ctx, attempt)
 
+	// The effective score is the highest total across this student's submitted
+	// attempts (original and makeup); the attempt's own score stays traceable.
+	effectiveScore := attempt.TotalScore
+	isEffective := attempt.Status == constants.AttemptSubmitted
+	if own, err := s.attemptRepo.ListAttemptsByExamAndStudent(ctx, attempt.ExamID, attempt.StudentID); err == nil {
+		if best := bestSubmittedAttempt(own); best != nil {
+			effectiveScore = best.TotalScore
+			isEffective = best.ID == attempt.ID
+		}
+	}
+
 	subjectiveScore := attempt.TotalScore - attempt.ObjectiveScore
 	return &dto.ReportResponse{
 		AttemptID:       attempt.ID,
 		ExamID:          exam.ID,
 		ExamTitle:       exam.Title,
+		Kind:            attempt.Kind,
 		TotalScore:      attempt.TotalScore,
+		EffectiveScore:  effectiveScore,
+		IsEffective:     isEffective,
 		ObjectiveScore:  attempt.ObjectiveScore,
 		SubjectiveScore: subjectiveScore,
 		Accuracy:        round2(accuracy),
@@ -523,6 +549,7 @@ func (s *AttemptService) ListGrading(ctx context.Context, role string, userID, e
 			AttemptID:      attempts[i].ID,
 			ExamID:         attempts[i].ExamID,
 			ExamTitle:      exam.Title,
+			Kind:           attempts[i].Kind,
 			Status:         attempts[i].Status,
 			ObjectiveScore: attempts[i].ObjectiveScore,
 			TotalScore:     attempts[i].TotalScore,
@@ -666,29 +693,189 @@ func (s *AttemptService) questionTypeByAnswer(ctx context.Context, a model.Answe
 	return q.Type, ObjectiveQuestionTypes()[q.Type]
 }
 
+// ranking ranks students by their effective score (best submitted attempt per
+// student) and returns the rank of the given attempt's student.
 func (s *AttemptService) ranking(ctx context.Context, attempt *model.ExamAttempt) (int, int) {
 	attempts, err := s.attemptRepo.ListAttemptsByExam(ctx, attempt.ExamID)
 	if err != nil {
 		return 0, 0
 	}
-	submitted := make([]model.ExamAttempt, 0, len(attempts))
+	bestByStudent := make(map[uint]model.ExamAttempt, len(attempts))
 	for _, a := range attempts {
-		if a.Status == constants.AttemptSubmitted {
-			submitted = append(submitted, a)
+		if a.Status != constants.AttemptSubmitted {
+			continue
+		}
+		current, ok := bestByStudent[a.StudentID]
+		if !ok || a.TotalScore > current.TotalScore {
+			bestByStudent[a.StudentID] = a
 		}
 	}
-	sort.Slice(submitted, func(i, j int) bool {
-		if submitted[i].TotalScore != submitted[j].TotalScore {
-			return submitted[i].TotalScore > submitted[j].TotalScore
+	effective := make([]model.ExamAttempt, 0, len(bestByStudent))
+	for _, a := range bestByStudent {
+		effective = append(effective, a)
+	}
+	sort.Slice(effective, func(i, j int) bool {
+		if effective[i].TotalScore != effective[j].TotalScore {
+			return effective[i].TotalScore > effective[j].TotalScore
 		}
-		return submitted[i].SubmittedAt.Before(*submitted[j].SubmittedAt)
+		return effective[i].SubmittedAt.Before(*effective[j].SubmittedAt)
 	})
-	for i, a := range submitted {
-		if a.ID == attempt.ID {
-			return i + 1, len(submitted)
+	for i, a := range effective {
+		if a.StudentID == attempt.StudentID {
+			return i + 1, len(effective)
 		}
 	}
-	return 0, len(submitted)
+	return 0, len(effective)
+}
+
+// reconcileWrongBook aligns the wrong book with the student's effective
+// (highest scoring) attempt for the exam: exam-sourced records that are not
+// wrong in the effective attempt are removed, and effective-attempt wrong
+// questions missing from the book are restored.
+func (s *AttemptService) reconcileWrongBook(ctx context.Context, examID, studentID uint) error {
+	attempts, err := s.attemptRepo.ListAttemptsByExamAndStudent(ctx, examID, studentID)
+	if err != nil {
+		return fmt.Errorf("list attempts for reconcile: %w", err)
+	}
+	effective := bestSubmittedAttempt(attempts)
+	if effective == nil {
+		return nil
+	}
+	answers, err := s.answerRepo.ListAnswersByAttempt(ctx, effective.ID)
+	if err != nil {
+		return fmt.Errorf("list answers for reconcile: %w", err)
+	}
+	wrongSet := make(map[uint]bool, len(answers))
+	wrongIDs := make([]uint, 0, len(answers))
+	for _, a := range answers {
+		if a.IsCorrect != nil && !*a.IsCorrect && !wrongSet[a.QuestionID] {
+			wrongSet[a.QuestionID] = true
+			wrongIDs = append(wrongIDs, a.QuestionID)
+		}
+	}
+	attemptIDs := make([]uint, 0, len(attempts))
+	for i := range attempts {
+		attemptIDs = append(attemptIDs, attempts[i].ID)
+	}
+	records, err := s.wrongRepo.ListWrongQuestionsByAttempts(ctx, studentID, attemptIDs)
+	if err != nil {
+		return fmt.Errorf("list wrong questions for reconcile: %w", err)
+	}
+	for _, rec := range records {
+		if wrongSet[rec.QuestionID] {
+			continue
+		}
+		if err := s.wrongRepo.DeleteWrongQuestion(ctx, rec.ID, studentID); err != nil {
+			return fmt.Errorf("delete superseded wrong question: %w", err)
+		}
+	}
+	if len(wrongIDs) == 0 {
+		return nil
+	}
+	existing, err := s.wrongRepo.ListWrongQuestionsByQuestions(ctx, studentID, wrongIDs)
+	if err != nil {
+		return fmt.Errorf("list existing wrong questions: %w", err)
+	}
+	existingSet := make(map[uint]bool, len(existing))
+	for _, rec := range existing {
+		existingSet[rec.QuestionID] = true
+	}
+	questions, err := s.questionRepo.FindQuestionsByIDs(ctx, wrongIDs)
+	if err != nil {
+		return fmt.Errorf("find questions for reconcile: %w", err)
+	}
+	now := time.Now()
+	for _, questionID := range wrongIDs {
+		if existingSet[questionID] {
+			continue
+		}
+		q, ok := questions[questionID]
+		if !ok {
+			continue
+		}
+		w := &model.WrongQuestion{
+			StudentID:      studentID,
+			QuestionID:     questionID,
+			AttemptID:      effective.ID,
+			KnowledgePoint: q.KnowledgePoint,
+			WrongCount:     1,
+			LastWrongAt:    now,
+			Status:         constants.WrongUnresolved,
+		}
+		if err := s.wrongRepo.UpsertWrongQuestion(ctx, w); err != nil {
+			return fmt.Errorf("restore wrong question: %w", err)
+		}
+	}
+	return nil
+}
+
+// paperQuestions loads the questions referenced by paper items in one batch.
+func (s *AttemptService) paperQuestions(ctx context.Context, items []model.ExamQuestion) (map[uint]model.Question, error) {
+	ids := make([]uint, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.QuestionID)
+	}
+	questions, err := s.questionRepo.FindQuestionsByIDs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("find paper questions: %w", err)
+	}
+	return questions, nil
+}
+
+// bestSubmittedAttempt returns the submitted attempt with the highest total
+// score (the effective record). Ties keep the earliest attempt.
+func bestSubmittedAttempt(attempts []model.ExamAttempt) *model.ExamAttempt {
+	var best *model.ExamAttempt
+	for i := range attempts {
+		a := &attempts[i]
+		if a.Status != constants.AttemptSubmitted {
+			continue
+		}
+		if best == nil || a.TotalScore > best.TotalScore {
+			best = a
+		}
+	}
+	return best
+}
+
+// newShuffledAttempt builds an in-progress attempt with shuffled question and
+// option order. kind distinguishes original attempts from makeup ones.
+func newShuffledAttempt(exam *model.Exam, studentID uint, items []model.ExamQuestion, questions map[uint]model.Question, kind string, attemptNo int, now time.Time) *model.ExamAttempt {
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	shuffle(items, rng)
+
+	order := make([]uint, 0, len(items))
+	optionOrder := map[uint][]string{}
+	for _, it := range items {
+		order = append(order, it.ID)
+		q, ok := questions[it.QuestionID]
+		if !ok {
+			continue
+		}
+		if isChoiceType(q.Type) {
+			options, _ := unmarshalOptions(q.Options)
+			shuffle(options, rng)
+			keys := make([]string, 0, len(options))
+			for _, opt := range options {
+				keys = append(keys, opt.Key)
+			}
+			optionOrder[it.ID] = keys
+		}
+	}
+
+	orderRaw, _ := json.Marshal(order)
+	optionRaw, _ := json.Marshal(optionOrder)
+	return &model.ExamAttempt{
+		ExamID:        exam.ID,
+		StudentID:     studentID,
+		Kind:          kind,
+		AttemptNo:     attemptNo,
+		Status:        constants.AttemptInProgress,
+		StartedAt:     now,
+		Deadline:      now.Add(time.Duration(exam.DurationMinutes) * time.Minute),
+		QuestionOrder: string(orderRaw),
+		OptionOrder:   string(optionRaw),
+	}
 }
 
 func parseOrder(raw string) []uint {

@@ -7,6 +7,8 @@ type ExamAttempt struct {
 	ID             uint       `gorm:"primaryKey" json:"id"`
 	ExamID         uint       `gorm:"index;not null" json:"exam_id"`
 	StudentID      uint       `gorm:"index;not null" json:"student_id"`
+	Kind           string     `gorm:"size:16;not null;default:original;index" json:"kind"`
+	AttemptNo      int        `gorm:"not null;default:1" json:"attempt_no"`
 	Status         string     `gorm:"size:16;not null;default:in_progress" json:"status"`
 	StartedAt      time.Time  `json:"started_at"`
 	SubmittedAt    *time.Time `json:"submitted_at"`

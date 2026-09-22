@@ -7,9 +7,11 @@ type AttemptSummary struct {
 	AttemptID      uint       `json:"attempt_id"`
 	ExamID         uint       `json:"exam_id"`
 	ExamTitle      string     `json:"exam_title"`
+	Kind           string     `json:"kind"`
 	Status         string     `json:"status"`
 	ObjectiveScore float64    `json:"objective_score"`
 	TotalScore     float64    `json:"total_score"`
+	EffectiveScore *float64   `json:"effective_score,omitempty"`
 	StartedAt      time.Time  `json:"started_at"`
 	SubmittedAt    *time.Time `json:"submitted_at"`
 }
@@ -35,6 +37,7 @@ type AttemptDetail struct {
 	AttemptID      uint                     `json:"attempt_id"`
 	ExamID         uint                     `json:"exam_id"`
 	ExamTitle      string                   `json:"exam_title"`
+	Kind           string                   `json:"kind"`
 	Status         string                   `json:"status"`
 	ObjectiveScore float64                  `json:"objective_score"`
 	TotalScore     float64                  `json:"total_score"`
@@ -54,18 +57,23 @@ type TypeScore struct {
 }
 
 // ReportResponse is the score analysis shown after grading.
+// TotalScore is the score of this attempt (traceable original record), while
+// EffectiveScore is the highest score across the original and makeup attempts.
 type ReportResponse struct {
-	AttemptID      uint        `json:"attempt_id"`
-	ExamID         uint        `json:"exam_id"`
-	ExamTitle      string      `json:"exam_title"`
-	TotalScore     float64     `json:"total_score"`
-	ObjectiveScore float64     `json:"objective_score"`
-	SubjectiveScore float64    `json:"subjective_score"`
-	Accuracy       float64     `json:"accuracy"`
-	Rank           int         `json:"rank"`
-	Participants   int         `json:"participants"`
-	TypeBreakdown  []TypeScore `json:"type_breakdown"`
-	SubmittedAt    *time.Time  `json:"submitted_at"`
+	AttemptID       uint        `json:"attempt_id"`
+	ExamID          uint        `json:"exam_id"`
+	ExamTitle       string      `json:"exam_title"`
+	Kind            string      `json:"kind"`
+	TotalScore      float64     `json:"total_score"`
+	EffectiveScore  float64     `json:"effective_score"`
+	IsEffective     bool        `json:"is_effective"`
+	ObjectiveScore  float64     `json:"objective_score"`
+	SubjectiveScore float64     `json:"subjective_score"`
+	Accuracy        float64     `json:"accuracy"`
+	Rank            int         `json:"rank"`
+	Participants    int         `json:"participants"`
+	TypeBreakdown   []TypeScore `json:"type_breakdown"`
+	SubmittedAt     *time.Time  `json:"submitted_at"`
 }
 
 // GradeListResponse lists attempts waiting for subjective grading.

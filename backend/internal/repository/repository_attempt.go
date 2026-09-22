@@ -82,6 +82,44 @@ func (r *Repository) ListAttemptsByExam(ctx context.Context, examID uint) ([]mod
 	return items, nil
 }
 
+// ListAttemptsByExamAndStudent returns all attempts of one student for an exam.
+func (r *Repository) ListAttemptsByExamAndStudent(ctx context.Context, examID, studentID uint) ([]model.ExamAttempt, error) {
+	var items []model.ExamAttempt
+	if err := r.db.WithContext(ctx).
+		Where("exam_id = ? AND student_id = ?", examID, studentID).
+		Order("id ASC").Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("list attempts by exam and student: %w", err)
+	}
+	return items, nil
+}
+
+// ListStudentAttemptsForExams returns all attempts of a student for the given exams.
+func (r *Repository) ListStudentAttemptsForExams(ctx context.Context, studentID uint, examIDs []uint) ([]model.ExamAttempt, error) {
+	if len(examIDs) == 0 {
+		return nil, nil
+	}
+	var items []model.ExamAttempt
+	if err := r.db.WithContext(ctx).
+		Where("student_id = ? AND exam_id IN ?", studentID, examIDs).
+		Order("id ASC").Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("list student attempts for exams: %w", err)
+	}
+	return items, nil
+}
+
+// MarkAbsentAttempts marks every unsubmitted in-progress original attempt of
+// an exam as absent. Makeup attempts are left untouched so an approved makeup
+// stays completable even if the exam is closed again.
+func (r *Repository) MarkAbsentAttempts(ctx context.Context, examID uint) (int64, error) {
+	res := r.db.WithContext(ctx).Model(&model.ExamAttempt{}).
+		Where("exam_id = ? AND status = ? AND kind = ?", examID, "in_progress", "original").
+		Update("status", "absent")
+	if res.Error != nil {
+		return 0, fmt.Errorf("mark absent attempts: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
 // CountAttempts returns the total number of attempts.
 func (r *Repository) CountAttempts(ctx context.Context) (int64, error) {
 	var total int64

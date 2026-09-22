@@ -8,6 +8,7 @@ import (
 )
 
 // UpsertWrongQuestion records a wrong answer, incrementing the wrong count.
+// AttemptID always tracks the most recent source attempt (0 for practice).
 func (r *Repository) UpsertWrongQuestion(ctx context.Context, w *model.WrongQuestion) error {
 	var existing model.WrongQuestion
 	err := r.db.WithContext(ctx).Where("student_id = ? AND question_id = ?", w.StudentID, w.QuestionID).First(&existing).Error
@@ -16,6 +17,7 @@ func (r *Repository) UpsertWrongQuestion(ctx context.Context, w *model.WrongQues
 			"wrong_count":   existing.WrongCount + 1,
 			"last_wrong_at": w.LastWrongAt,
 			"status":        "unresolved",
+			"attempt_id":    w.AttemptID,
 		})
 		if res.Error != nil {
 			return fmt.Errorf("update wrong question: %w", res.Error)
@@ -48,6 +50,35 @@ func (r *Repository) ListWrongQuestions(ctx context.Context, studentID uint, kno
 		return nil, 0, fmt.Errorf("list wrong questions: %w", err)
 	}
 	return items, total, nil
+}
+
+// ListWrongQuestionsByAttempts returns wrong-question records sourced from the given attempts.
+func (r *Repository) ListWrongQuestionsByAttempts(ctx context.Context, studentID uint, attemptIDs []uint) ([]model.WrongQuestion, error) {
+	if len(attemptIDs) == 0 {
+		return nil, nil
+	}
+	var items []model.WrongQuestion
+	if err := r.db.WithContext(ctx).
+		Where("student_id = ? AND attempt_id IN ?", studentID, attemptIDs).
+		Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("list wrong questions by attempts: %w", err)
+	}
+	return items, nil
+}
+
+// ListWrongQuestionsByQuestions returns a student's wrong-question records for
+// the given questions, regardless of their source attempt.
+func (r *Repository) ListWrongQuestionsByQuestions(ctx context.Context, studentID uint, questionIDs []uint) ([]model.WrongQuestion, error) {
+	if len(questionIDs) == 0 {
+		return nil, nil
+	}
+	var items []model.WrongQuestion
+	if err := r.db.WithContext(ctx).
+		Where("student_id = ? AND question_id IN ?", studentID, questionIDs).
+		Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("list wrong questions by questions: %w", err)
+	}
+	return items, nil
 }
 
 // DeleteWrongQuestion removes one wrong question record.

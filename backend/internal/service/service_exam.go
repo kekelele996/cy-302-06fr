@@ -18,11 +18,12 @@ type ExamService struct {
 	baseService
 	repo         ExamRepo
 	questionRepo QuestionRepo
+	attemptRepo  AttemptRepo
 }
 
 // NewExamService constructs ExamService.
-func NewExamService(repo ExamRepo, questionRepo QuestionRepo, logger *slog.Logger) *ExamService {
-	return &ExamService{baseService: NewBaseService(logger), repo: repo, questionRepo: questionRepo}
+func NewExamService(repo ExamRepo, questionRepo QuestionRepo, attemptRepo AttemptRepo, logger *slog.Logger) *ExamService {
+	return &ExamService{baseService: NewBaseService(logger), repo: repo, questionRepo: questionRepo, attemptRepo: attemptRepo}
 }
 
 // Create builds an exam and auto-generates its paper.
@@ -89,7 +90,8 @@ func (s *ExamService) List(ctx context.Context, role string, userID uint, query 
 		filter.CreatedBy = userID
 	case constants.RoleStudent:
 		if query.Status == "" {
-			filter.Status = constants.ExamPublished
+			// Students see published exams plus closed ones (for makeup applications).
+			filter.Statuses = []string{constants.ExamPublished, constants.ExamClosed}
 		}
 	default:
 		return dto.PageResult{}, ErrForbidden
@@ -117,7 +119,7 @@ func (s *ExamService) Get(ctx context.Context, role string, userID, id uint) (*d
 	if err != nil {
 		return nil, err
 	}
-	if role == constants.RoleStudent && exam.Status != constants.ExamPublished {
+	if role == constants.RoleStudent && exam.Status != constants.ExamPublished && exam.Status != constants.ExamClosed {
 		return nil, ErrNotFound
 	}
 	if role == constants.RoleTeacher && exam.CreatedBy != userID {
@@ -149,7 +151,9 @@ func (s *ExamService) Publish(ctx context.Context, role string, userID, id uint)
 	return nil
 }
 
-// Close stops new attempts for an exam.
+// Close stops new attempts for an exam and marks every unsubmitted
+// in-progress attempt as absent so students can apply for a makeup exam.
+// Closing is idempotent: an already closed exam only re-runs absence marking.
 func (s *ExamService) Close(ctx context.Context, role string, userID, id uint) error {
 	exam, err := s.repo.FindExamByID(ctx, id)
 	if err != nil {
@@ -158,9 +162,21 @@ func (s *ExamService) Close(ctx context.Context, role string, userID, id uint) e
 	if role == constants.RoleTeacher && exam.CreatedBy != userID {
 		return ErrForbidden
 	}
-	exam.Status = constants.ExamClosed
-	if err := s.repo.UpdateExam(ctx, exam); err != nil {
-		return fmt.Errorf("close exam: %w", err)
+	if exam.Status == constants.ExamDraft {
+		return fmt.Errorf("%w: 请先发布考试再关闭", ErrValidation)
+	}
+	if exam.Status != constants.ExamClosed {
+		exam.Status = constants.ExamClosed
+		if err := s.repo.UpdateExam(ctx, exam); err != nil {
+			return fmt.Errorf("close exam: %w", err)
+		}
+	}
+	absent, err := s.attemptRepo.MarkAbsentAttempts(ctx, id)
+	if err != nil {
+		return fmt.Errorf("mark absent attempts: %w", err)
+	}
+	if absent > 0 {
+		s.logger.Info("marked unsubmitted attempts absent", "exam_id", id, "count", absent)
 	}
 	return nil
 }

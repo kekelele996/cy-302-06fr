@@ -5,15 +5,25 @@
     </div>
     <el-table :data="rows" v-loading="loading" border>
       <el-table-column prop="attempt_id" label="记录 ID" width="90" />
-      <el-table-column prop="exam_title" label="考试名称" min-width="180" />
-      <el-table-column label="状态" width="110">
+      <el-table-column prop="exam_title" label="考试名称" min-width="160" />
+      <el-table-column label="类型" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.status === 'submitted' ? 'success' : 'warning'">{{ row.status === 'submitted' ? '已交卷' : '进行中' }}</el-tag>
+          <el-tag :type="row.kind === 'makeup' ? 'warning' : 'info'">{{ row.kind === 'makeup' ? '补考' : '原始' }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="objective_score" label="客观题得分" width="110" />
-      <el-table-column prop="total_score" label="总分" width="90" />
-      <el-table-column label="交卷时间" min-width="170">
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag :type="statusTag[row.status] || 'info'">{{ statusLabels[row.status] || row.status }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="total_score" label="本次成绩" width="90" />
+      <el-table-column label="有效成绩" width="90">
+        <template #default="{ row }">
+          <span v-if="row.effective_score !== null && row.effective_score !== undefined">{{ row.effective_score }}</span>
+          <span v-else>-</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="交卷时间" min-width="160">
         <template #default="{ row }">{{ formatTime(row.submitted_at) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="120" fixed="right">
@@ -43,6 +53,17 @@ const rows = ref<AttemptSummary[]>([])
 const total = ref(0)
 const loading = ref(false)
 const query = reactive({ page: 1, page_size: 10 })
+
+const statusLabels: Record<string, string> = {
+  in_progress: '进行中',
+  submitted: '已交卷',
+  absent: '缺考'
+}
+const statusTag: Record<string, string> = {
+  in_progress: 'warning',
+  submitted: 'success',
+  absent: 'danger'
+}
 
 function formatTime(v?: string | null) {
   return v ? dayjs(v).format('YYYY-MM-DD HH:mm:ss') : '-'

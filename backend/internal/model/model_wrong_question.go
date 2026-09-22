@@ -3,10 +3,13 @@ package model
 import "time"
 
 // WrongQuestion records a student's incorrectly answered question.
+// AttemptID traces the exam attempt that produced the record (0 means it came
+// from practice rather than an exam attempt).
 type WrongQuestion struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
 	StudentID      uint      `gorm:"index;not null" json:"student_id"`
 	QuestionID     uint      `gorm:"index;not null" json:"question_id"`
+	AttemptID      uint      `gorm:"index" json:"attempt_id"`
 	KnowledgePoint string    `gorm:"size:128;index" json:"knowledge_point"`
 	WrongCount     int       `gorm:"not null;default:1" json:"wrong_count"`
 	LastWrongAt    time.Time `json:"last_wrong_at"`

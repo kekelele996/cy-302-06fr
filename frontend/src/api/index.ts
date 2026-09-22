@@ -7,6 +7,8 @@ import type {
   ExamCreatePayload,
   ExamStatResponse,
   LoginResponse,
+  MakeupRequestItem,
+  MakeupStatus,
   OverviewResponse,
   PageResult,
   PracticeResultResponse,
@@ -136,5 +138,23 @@ export const wrongApi = {
 export const statsApi = {
   overview() {
     return http.get<never, OverviewResponse>('/stats/overview')
+  }
+}
+
+export const makeupApi = {
+  status(examId: number) {
+    return http.get<never, MakeupStatus>(`/exams/${examId}/makeup`)
+  },
+  apply(examId: number, reason: string) {
+    return http.post<never, MakeupRequestItem>(`/exams/${examId}/makeup`, { reason })
+  },
+  listByExam(examId: number) {
+    return http.get<never, MakeupRequestItem[]>(`/exams/${examId}/makeup-requests`)
+  },
+  approve(id: number) {
+    return http.post<never, { message: string }>(`/makeup-requests/${id}/approve`)
+  },
+  reject(id: number) {
+    return http.post<never, { message: string }>(`/makeup-requests/${id}/reject`)
   }
 }

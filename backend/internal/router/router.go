@@ -50,10 +50,13 @@ func New(s *handler.Server, authMiddleware gin.HandlerFunc) *gin.Engine {
 				staff.GET("/exams/:id/questions", s.ListExamQuestions)
 				staff.GET("/exams/:id/stats", s.ExamStats)
 				staff.GET("/exams/:id/attempts", s.ListGrading)
+				staff.GET("/exams/:id/makeup-requests", s.ListMakeupRequests)
 				staff.POST("/exams/:id/publish", s.PublishExam)
 				staff.POST("/exams/:id/close", s.CloseExam)
 				staff.DELETE("/exams/:id", s.DeleteExam)
 				staff.PUT("/attempts/:id/grade", s.GradeAttempt)
+				staff.POST("/makeup-requests/:id/approve", s.ApproveMakeupRequest)
+				staff.POST("/makeup-requests/:id/reject", s.RejectMakeupRequest)
 			}
 
 			studentOnly := authorized.Group("")
@@ -61,6 +64,8 @@ func New(s *handler.Server, authMiddleware gin.HandlerFunc) *gin.Engine {
 			{
 				studentOnly.POST("/exams/:id/attempts", s.StartAttempt)
 				studentOnly.GET("/exams/:id/attempts/current", s.CurrentAttempt)
+				studentOnly.GET("/exams/:id/makeup", s.GetMakeupStatus)
+				studentOnly.POST("/exams/:id/makeup", s.ApplyMakeup)
 				studentOnly.GET("/attempts", s.ListAttempts)
 				studentOnly.POST("/attempts/:id/answers", s.SaveAnswer)
 				studentOnly.POST("/attempts/:id/submit", s.SubmitAttempt)

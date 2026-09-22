@@ -1,4 +1,4 @@
--- Migration 0001: initial schema for the online exam platform.
+-- Initial schema for the online exam platform (migrations 0001 + 0002).
 -- The Go server also runs GORM AutoMigrate at startup, so this file documents
 -- the canonical schema and can be applied manually if needed.
 
@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS exam_attempts (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     exam_id BIGINT UNSIGNED NOT NULL,
     student_id BIGINT UNSIGNED NOT NULL,
+    kind VARCHAR(16) NOT NULL DEFAULT 'original',
+    attempt_no INT NOT NULL DEFAULT 1,
     status VARCHAR(16) NOT NULL DEFAULT 'in_progress',
     started_at DATETIME(3) NULL,
     submitted_at DATETIME(3) NULL,
@@ -79,7 +81,8 @@ CREATE TABLE IF NOT EXISTS exam_attempts (
     updated_at DATETIME(3) NULL,
     PRIMARY KEY (id),
     KEY idx_exam_attempts_exam_id (exam_id),
-    KEY idx_exam_attempts_student_id (student_id)
+    KEY idx_exam_attempts_student_id (student_id),
+    KEY idx_exam_attempts_kind (kind)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS answers (
@@ -103,6 +106,7 @@ CREATE TABLE IF NOT EXISTS wrong_questions (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     student_id BIGINT UNSIGNED NOT NULL,
     question_id BIGINT UNSIGNED NOT NULL,
+    attempt_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
     knowledge_point VARCHAR(128) DEFAULT '',
     wrong_count INT NOT NULL DEFAULT 1,
     last_wrong_at DATETIME(3) NULL,
@@ -111,5 +115,22 @@ CREATE TABLE IF NOT EXISTS wrong_questions (
     updated_at DATETIME(3) NULL,
     PRIMARY KEY (id),
     KEY idx_wrong_questions_student_id (student_id),
-    KEY idx_wrong_questions_question_id (question_id)
+    KEY idx_wrong_questions_question_id (question_id),
+    KEY idx_wrong_questions_attempt_id (attempt_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS makeup_requests (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    exam_id BIGINT UNSIGNED NOT NULL,
+    student_id BIGINT UNSIGNED NOT NULL,
+    reason VARCHAR(255) DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    reviewed_by BIGINT UNSIGNED DEFAULT 0,
+    reviewed_at DATETIME(3) NULL,
+    attempt_id BIGINT UNSIGNED DEFAULT 0,
+    created_at DATETIME(3) NULL,
+    updated_at DATETIME(3) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY idx_makeup_exam_student (exam_id, student_id),
+    KEY idx_makeup_requests_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
