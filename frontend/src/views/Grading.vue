@@ -7,12 +7,19 @@
 
     <div class="toolbar">
       <span>选择答题记录：</span>
-      <el-select v-model="attemptId" placeholder="请选择" style="width: 320px" @change="loadDetail">
-        <el-option v-for="a in attempts" :key="a.attempt_id" :label="`#${a.attempt_id} 客观分 ${a.objective_score}`" :value="a.attempt_id" />
+      <el-select v-model="attemptId" placeholder="请选择" style="width: 360px" @change="loadDetail">
+        <el-option
+          v-for="a in attempts"
+          :key="a.attempt_id"
+          :label="`#${a.attempt_id} ${a.kind === 'makeup' ? '【补考】' : '【正考】'} 客观分 ${a.objective_score}`"
+          :value="a.attempt_id"
+        />
       </el-select>
     </div>
 
     <template v-if="detail">
+      <el-tag v-if="detail.kind === 'makeup'" type="warning" style="margin-bottom: 12px">补考记录（有效成绩取正考与补考的最高总分）</el-tag>
+      <el-tag v-else type="info" style="margin-bottom: 12px">正考记录</el-tag>
       <el-table :data="subjectiveQuestions" border>
         <el-table-column prop="content" label="题干" min-width="220" show-overflow-tooltip />
         <el-table-column label="学生答案" min-width="220">

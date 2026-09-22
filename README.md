@@ -10,6 +10,7 @@
 - **在线考试**：倒计时自动交卷、标记疑问、答题卡导航、刷新页面视为交卷。
 - **自动阅卷与成绩分析**：客观题自动判分，填空/简答由教师在线批改，成绩报告含题型得分分布、正确率与排名。
 - **考试记录与错题本**：查看历史记录与答题详情，错题自动收集并可按知识点复习、重复练习。
+- **补考闭环**：关考时未交卷记录自动记为缺考；缺考或正考成绩未达总分 60% 的学生可申请一次补考，教师批准后生成独立补考记录；报告、统计、排名与错题本均按正考/补考两次中的最高有效总分计算，原始记录仍可追溯；重复申请与并发审批只成功一次。
 - **防作弊**：同一账号单设备登录、前端全屏锁定、禁用右键与文本选择。
 
 ## 快速启动（Docker Compose 一键部署）
@@ -203,6 +204,22 @@ npm run dev
 | DELETE | `/api/v1/wrong-questions/:id` | 移除错题 | 学生 |
 | GET | `/api/v1/wrong-questions/practice` | 获取错题练习 | 学生 |
 | POST | `/api/v1/wrong-questions/practice` | 提交错题练习 | 学生 |
+
+### 补考闭环
+
+补考资格：关考后存在考试记录（含缺考），且正考未达总分 60%；每位学生每场考试只能申请一次，已有待审申请或补考进行中时拒绝。有效成绩 = 正考与补考中已交卷记录的最高总分（报告、统计、排名、错题本统一按此计算，原始记录保留可追溯）。
+
+| 方法 | 路径 | 说明 | 权限 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/exams/:id/makeup/eligibility` | 查询补考资格与审批状态 | 学生 |
+| GET | `/api/v1/exams/:id/makeup/application` | 查看本人补考申请 | 学生 |
+| POST | `/api/v1/exams/:id/makeup/applications` | 提交补考申请（重复/并发只成功一次） | 学生 |
+| POST | `/api/v1/exams/:id/makeup/attempts` | 批准后进入/继续独立补考 | 学生 |
+| GET | `/api/v1/makeup-applications` | 补考申请分页列表（可按考试/状态筛选） | 管理员/教师 |
+| POST | `/api/v1/makeup-applications/:id/approve` | 批准并生成独立补考记录（并发只成功一次） | 管理员/教师 |
+| POST | `/api/v1/makeup-applications/:id/reject` | 驳回补考申请 | 管理员/教师 |
+
+> 说明：`POST /exams/:id/close` 关考时会把所有未交卷的正考记录原子地置为 `absent`（缺考），响应中返回 `absent_count`。考试统计接口返回 `original`（原始交卷记录汇总）与 `effective`（按学生取两次最高的有效成绩汇总）两套指标，并在 `raw_attempts` 中标注每条原始记录是否为有效记录。
 
 ## License
 

@@ -91,6 +91,7 @@ export interface AttemptStartResponse {
   attempt_id: number
   exam_id: number
   title: string
+  kind: 'normal' | 'makeup'
   duration_minutes: number
   total_score: number
   started_at: string
@@ -102,9 +103,12 @@ export interface AttemptSummary {
   attempt_id: number
   exam_id: number
   exam_title: string
-  status: 'in_progress' | 'submitted'
+  kind: 'normal' | 'makeup'
+  status: 'in_progress' | 'submitted' | 'absent'
   objective_score: number
   total_score: number
+  effective_score: number
+  is_effective: boolean
   started_at: string
   submitted_at?: string | null
 }
@@ -128,9 +132,12 @@ export interface AttemptDetail {
   attempt_id: number
   exam_id: number
   exam_title: string
+  kind: 'normal' | 'makeup'
   status: string
   objective_score: number
   total_score: number
+  effective_score: number
+  is_effective: boolean
   started_at: string
   submitted_at?: string | null
   deadline: string
@@ -149,9 +156,14 @@ export interface ReportResponse {
   attempt_id: number
   exam_id: number
   exam_title: string
+  kind: 'normal' | 'makeup'
   total_score: number
   objective_score: number
   subjective_score: number
+  effective_score: number
+  is_effective: boolean
+  effective_kind: 'normal' | 'makeup' | ''
+  effective_attempt_id: number
   accuracy: number
   rank: number
   participants: number
@@ -164,19 +176,69 @@ export interface RankItem {
   student_name: string
   student_username: string
   total_score: number
+  kind: 'normal' | 'makeup'
+  attempt_id: number
+  submitted_at?: string | null
+}
+
+export interface ScoreBucket {
+  label: string
+  count: number
+}
+
+export interface StatSummary {
+  count: number
+  average_score: number
+  highest_score: number
+  lowest_score: number
+  pass_count: number
+  distribution: ScoreBucket[]
+}
+
+export interface RawAttemptRow {
+  attempt_id: number
+  student_name: string
+  student_username: string
+  kind: 'normal' | 'makeup'
+  status: 'in_progress' | 'submitted' | 'absent'
+  total_score: number
+  is_effective: boolean
   submitted_at?: string | null
 }
 
 export interface ExamStatResponse {
   exam_id: number
   exam_title: string
-  participant_count: number
-  average_score: number
-  highest_score: number
-  lowest_score: number
-  pass_count: number
-  score_distribution: { label: string; count: number }[]
+  absent_count: number
+  original: StatSummary
+  effective: StatSummary
   ranking: RankItem[]
+  raw_attempts: RawAttemptRow[]
+}
+
+export type MakeupStatus = 'pending' | 'approved' | 'rejected'
+
+export interface MakeupApplicationItem {
+  id: number
+  exam_id: number
+  exam_title: string
+  student_id: number
+  student_name: string
+  student_username: string
+  reason: string
+  status: MakeupStatus
+  review_remark: string
+  reviewed_by: number
+  reviewed_at?: string | null
+  makeup_attempt_id?: number | null
+  created_at: string
+}
+
+export interface MakeupEligibility {
+  exam_id: number
+  eligible: boolean
+  reason: string
+  application: MakeupApplicationItem | null
 }
 
 export interface OverviewResponse {

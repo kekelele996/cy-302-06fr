@@ -54,6 +54,10 @@ func New(s *handler.Server, authMiddleware gin.HandlerFunc) *gin.Engine {
 				staff.POST("/exams/:id/close", s.CloseExam)
 				staff.DELETE("/exams/:id", s.DeleteExam)
 				staff.PUT("/attempts/:id/grade", s.GradeAttempt)
+
+				staff.GET("/makeup-applications", s.ListMakeupApplications)
+				staff.POST("/makeup-applications/:id/approve", s.ApproveMakeup)
+				staff.POST("/makeup-applications/:id/reject", s.RejectMakeup)
 			}
 
 			studentOnly := authorized.Group("")
@@ -61,6 +65,10 @@ func New(s *handler.Server, authMiddleware gin.HandlerFunc) *gin.Engine {
 			{
 				studentOnly.POST("/exams/:id/attempts", s.StartAttempt)
 				studentOnly.GET("/exams/:id/attempts/current", s.CurrentAttempt)
+				studentOnly.GET("/exams/:id/makeup/eligibility", s.MakeupEligibility)
+				studentOnly.GET("/exams/:id/makeup/application", s.MyMakeupApplication)
+				studentOnly.POST("/exams/:id/makeup/applications", s.ApplyMakeup)
+				studentOnly.POST("/exams/:id/makeup/attempts", s.StartMakeup)
 				studentOnly.GET("/attempts", s.ListAttempts)
 				studentOnly.POST("/attempts/:id/answers", s.SaveAnswer)
 				studentOnly.POST("/attempts/:id/submit", s.SubmitAttempt)

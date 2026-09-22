@@ -7,6 +7,8 @@ import type {
   ExamCreatePayload,
   ExamStatResponse,
   LoginResponse,
+  MakeupApplicationItem,
+  MakeupEligibility,
   OverviewResponse,
   PageResult,
   PracticeResultResponse,
@@ -115,6 +117,30 @@ export const attemptApi = {
   },
   grade(attemptId: number, items: { exam_question_id: number; score: number }[]) {
     return http.put<never, { message: string }>(`/attempts/${attemptId}/grade`, { items })
+  }
+}
+
+export const makeupApi = {
+  eligibility(examId: number) {
+    return http.get<never, MakeupEligibility>(`/exams/${examId}/makeup/eligibility`)
+  },
+  myApplication(examId: number) {
+    return http.get<never, MakeupApplicationItem>(`/exams/${examId}/makeup/application`)
+  },
+  apply(examId: number, reason: string) {
+    return http.post<never, MakeupApplicationItem>(`/exams/${examId}/makeup/applications`, { reason })
+  },
+  start(examId: number) {
+    return http.post<never, AttemptStartResponse>(`/exams/${examId}/makeup/attempts`)
+  },
+  list(params: { page?: number; page_size?: number; exam_id?: number; status?: string }) {
+    return http.get<never, PageResult<MakeupApplicationItem>>('/makeup-applications', { params })
+  },
+  approve(id: number) {
+    return http.post<never, MakeupApplicationItem>(`/makeup-applications/${id}/approve`)
+  },
+  reject(id: number, remark: string) {
+    return http.post<never, MakeupApplicationItem>(`/makeup-applications/${id}/reject`, { remark })
   }
 }
 

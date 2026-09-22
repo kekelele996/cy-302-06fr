@@ -9,10 +9,10 @@ const (
 
 // Question types
 const (
-	QuestionSingle     = "single"
-	QuestionMultiple   = "multiple"
-	QuestionTrueFalse  = "true_false"
-	QuestionFillBlank  = "fill_blank"
+	QuestionSingle      = "single"
+	QuestionMultiple    = "multiple"
+	QuestionTrueFalse   = "true_false"
+	QuestionFillBlank   = "fill_blank"
 	QuestionShortAnswer = "short_answer"
 )
 
@@ -34,7 +34,24 @@ const (
 const (
 	AttemptInProgress = "in_progress"
 	AttemptSubmitted  = "submitted"
+	AttemptAbsent     = "absent"
 )
+
+// Attempt kinds
+const (
+	AttemptKindNormal = "normal"
+	AttemptKindMakeup = "makeup"
+)
+
+// Makeup application statuses
+const (
+	MakeupPending  = "pending"
+	MakeupApproved = "approved"
+	MakeupRejected = "rejected"
+)
+
+// Pass threshold ratio relative to the exam total score.
+const PassThresholdRatio = 0.6
 
 // Wrong question statuses
 const (

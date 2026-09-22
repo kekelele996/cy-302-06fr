@@ -24,7 +24,7 @@ type ExamCreateRequest struct {
 // ExamListQuery filters exam list.
 type ExamListQuery struct {
 	PageQuery
-	Status string `form:"status" binding:"omitempty,oneof=draft published closed"`
+	Status  string `form:"status" binding:"omitempty,oneof=draft published closed"`
 	Keyword string `form:"keyword"`
 }
 
@@ -45,7 +45,7 @@ type ExamResponse struct {
 
 // ExamQuestionResponse is one paper question (teacher/admin view includes answer).
 type ExamQuestionResponse struct {
-	ID      uint    `json:"id"`
-	Score   float64 `json:"score"`
+	ID       uint             `json:"id"`
+	Score    float64          `json:"score"`
 	Question QuestionResponse `json:"question"`
 }

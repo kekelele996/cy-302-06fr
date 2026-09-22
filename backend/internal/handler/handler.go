@@ -14,14 +14,15 @@ import (
 
 // Server aggregates all services for HTTP handlers.
 type Server struct {
-	logger    *slog.Logger
-	auth      *service.AuthService
-	users     *service.UserService
-	questions *service.QuestionService
-	exams     *service.ExamService
-	attempts  *service.AttemptService
-	stats     *service.StatsService
-	wrong     *service.WrongQuestionService
+	logger             *slog.Logger
+	auth               *service.AuthService
+	users              *service.UserService
+	questions          *service.QuestionService
+	exams              *service.ExamService
+	attempts           *service.AttemptService
+	stats              *service.StatsService
+	wrong              *service.WrongQuestionService
+	makeupApplications *service.MakeupApplicationService
 }
 
 // NewServer constructs Server with injected services.
@@ -34,16 +35,18 @@ func NewServer(
 	attempts *service.AttemptService,
 	stats *service.StatsService,
 	wrong *service.WrongQuestionService,
+	makeupApplications *service.MakeupApplicationService,
 ) *Server {
 	return &Server{
-		logger:    logger,
-		auth:      auth,
-		users:     users,
-		questions: questions,
-		exams:     exams,
-		attempts:  attempts,
-		stats:     stats,
-		wrong:     wrong,
+		logger:             logger,
+		auth:               auth,
+		users:              users,
+		questions:          questions,
+		exams:              exams,
+		attempts:           attempts,
+		stats:              stats,
+		wrong:              wrong,
+		makeupApplications: makeupApplications,
 	}
 }
 
@@ -62,7 +65,7 @@ func (s *Server) respondError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrNotFound):
 		httpx.Fail(c, http.StatusNotFound, constants.CodeNotFound, "资源不存在")
 	case errors.Is(err, service.ErrConflict):
-		httpx.Fail(c, http.StatusConflict, constants.CodeConflict, "资源冲突")
+		httpx.Fail(c, http.StatusConflict, constants.CodeConflict, conflictMessage(err))
 	case errors.Is(err, service.ErrUnauthorized):
 		httpx.Fail(c, http.StatusUnauthorized, constants.CodeUnauthorized, "认证失败")
 	case errors.Is(err, service.ErrForbidden):
@@ -75,6 +78,16 @@ func (s *Server) respondError(c *gin.Context, err error) {
 		s.logger.Error("internal error", "error", err)
 		httpx.Fail(c, http.StatusInternalServerError, constants.CodeInternal, "服务器内部错误")
 	}
+}
+
+// conflictMessage surfaces a domain-specific conflict message when the service
+// wrapped the sentinel error with one, otherwise it falls back to a generic text.
+func conflictMessage(err error) string {
+	msg := err.Error()
+	if msg == "" || msg == service.ErrConflict.Error() {
+		return "资源冲突"
+	}
+	return msg
 }
 
 func parsePage(c *gin.Context) (int, int) {

@@ -88,8 +88,17 @@ func (s *ExamService) List(ctx context.Context, role string, userID uint, query 
 	case constants.RoleTeacher:
 		filter.CreatedBy = userID
 	case constants.RoleStudent:
-		if query.Status == "" {
-			filter.Status = constants.ExamPublished
+		// students see published exams and closed exams (to review results and
+		// apply for makeup), but never drafts.
+		page, pageSize := normalizePage(query.Page, query.PageSize)
+		switch query.Status {
+		case constants.ExamPublished, constants.ExamClosed:
+			filter.Status = query.Status
+		case "":
+			filter.Statuses = []string{constants.ExamPublished, constants.ExamClosed}
+		default:
+			empty := dto.PageResult{Items: []dto.ExamResponse{}, Total: 0, Page: page, PageSize: pageSize}
+			return empty, nil
 		}
 	default:
 		return dto.PageResult{}, ErrForbidden
@@ -117,7 +126,7 @@ func (s *ExamService) Get(ctx context.Context, role string, userID, id uint) (*d
 	if err != nil {
 		return nil, err
 	}
-	if role == constants.RoleStudent && exam.Status != constants.ExamPublished {
+	if role == constants.RoleStudent && exam.Status != constants.ExamPublished && exam.Status != constants.ExamClosed {
 		return nil, ErrNotFound
 	}
 	if role == constants.RoleTeacher && exam.CreatedBy != userID {
@@ -149,20 +158,23 @@ func (s *ExamService) Publish(ctx context.Context, role string, userID, id uint)
 	return nil
 }
 
-// Close stops new attempts for an exam.
-func (s *ExamService) Close(ctx context.Context, role string, userID, id uint) error {
+// Close stops new attempts for an exam and marks unfinished normal attempts as absent.
+func (s *ExamService) Close(ctx context.Context, role string, userID, id uint) (int64, error) {
 	exam, err := s.repo.FindExamByID(ctx, id)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if role == constants.RoleTeacher && exam.CreatedBy != userID {
-		return ErrForbidden
+		return 0, ErrForbidden
 	}
-	exam.Status = constants.ExamClosed
-	if err := s.repo.UpdateExam(ctx, exam); err != nil {
-		return fmt.Errorf("close exam: %w", err)
+	if exam.Status != constants.ExamPublished {
+		return 0, fmt.Errorf("%w: 只有已发布的考试可以关考", ErrValidation)
 	}
-	return nil
+	absentCount, err := s.repo.CloseExamAndMarkAbsent(ctx, id)
+	if err != nil {
+		return 0, fmt.Errorf("close exam: %w", err)
+	}
+	return absentCount, nil
 }
 
 // Delete removes an exam (only creator/admin).

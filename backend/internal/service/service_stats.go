@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 
 	"github.com/gbexam/online-exam/internal/constants"
 	"github.com/gbexam/online-exam/internal/dto"
@@ -48,7 +47,9 @@ func (s *StatsService) Overview(ctx context.Context) (*dto.OverviewResponse, err
 	}, nil
 }
 
-// ExamStats returns score statistics and ranking for one exam.
+// ExamStats returns score statistics and ranking for one exam. Original
+// statistics are computed from raw submitted records; effective statistics are
+// computed from each student's highest valid total (original or makeup).
 func (s *StatsService) ExamStats(ctx context.Context, role string, userID, examID uint) (*dto.ExamStatResponse, error) {
 	exam, err := s.repo.FindExamByID(ctx, examID)
 	if err != nil {
@@ -63,69 +64,99 @@ func (s *StatsService) ExamStats(ctx context.Context, role string, userID, examI
 	}
 
 	submitted := make([]model.ExamAttempt, 0, len(attempts))
+	absentCount := 0
 	for _, a := range attempts {
-		if a.Status == constants.AttemptSubmitted {
+		switch a.Status {
+		case constants.AttemptSubmitted:
 			submitted = append(submitted, a)
+		case constants.AttemptAbsent:
+			absentCount++
 		}
-	}
-	sort.Slice(submitted, func(i, j int) bool {
-		if submitted[i].TotalScore != submitted[j].TotalScore {
-			return submitted[i].TotalScore > submitted[j].TotalScore
-		}
-		if submitted[i].SubmittedAt != nil && submitted[j].SubmittedAt != nil {
-			return submitted[i].SubmittedAt.Before(*submitted[j].SubmittedAt)
-		}
-		return submitted[i].ID < submitted[j].ID
-	})
-
-	total := 0.0
-	highest := 0.0
-	lowest := 0.0
-	passCount := 0
-	if len(submitted) > 0 {
-		highest = submitted[0].TotalScore
-		lowest = submitted[len(submitted)-1].TotalScore
-	}
-	for _, a := range submitted {
-		total += a.TotalScore
-		if exam.TotalScore > 0 && a.TotalScore >= exam.TotalScore*0.6 {
-			passCount++
-		}
-	}
-	average := 0.0
-	if len(submitted) > 0 {
-		average = total / float64(len(submitted))
 	}
 
-	buckets := buildScoreBuckets(submitted, exam.TotalScore)
-	ranking := make([]dto.RankItem, 0, len(submitted))
-	for i, a := range submitted {
-		name := ""
-		username := ""
-		if user, userErr := s.repo.FindUserByID(ctx, a.StudentID); userErr == nil {
-			name = user.Name
-			username = user.Username
+	effectiveRows := EffectiveAttempts(attempts)
+	effective := make([]model.ExamAttempt, 0, len(effectiveRows))
+	for _, row := range effectiveRows {
+		if row.Attempt != nil {
+			effective = append(effective, *row.Attempt)
 		}
+	}
+	SortAttemptsByScore(effective)
+
+	originalSummary := summarize(submitted, exam.TotalScore)
+	effectiveSummary := summarize(effective, exam.TotalScore)
+
+	ranking := make([]dto.RankItem, 0, len(effective))
+	for i, a := range effective {
+		name, username := s.studentName(ctx, a.StudentID)
 		ranking = append(ranking, dto.RankItem{
 			Rank:            i + 1,
 			StudentName:     name,
 			StudentUsername: username,
 			TotalScore:      a.TotalScore,
+			Kind:            a.Kind,
+			AttemptID:       a.ID,
+			SubmittedAt:     a.SubmittedAt,
+		})
+	}
+
+	rawRows := make([]dto.RawAttemptRow, 0, len(attempts))
+	for _, a := range attempts {
+		name, username := s.studentName(ctx, a.StudentID)
+		isEffective := false
+		if row, ok := effectiveRows[a.StudentID]; ok && row.Attempt != nil {
+			isEffective = row.Attempt.ID == a.ID && a.Status == constants.AttemptSubmitted
+		}
+		rawRows = append(rawRows, dto.RawAttemptRow{
+			AttemptID:       a.ID,
+			StudentName:     name,
+			StudentUsername: username,
+			Kind:            a.Kind,
+			Status:          a.Status,
+			TotalScore:      a.TotalScore,
+			IsEffective:     isEffective,
 			SubmittedAt:     a.SubmittedAt,
 		})
 	}
 
 	return &dto.ExamStatResponse{
-		ExamID:            exam.ID,
-		ExamTitle:         exam.Title,
-		ParticipantCount:  len(submitted),
-		AverageScore:      round2(average),
-		HighestScore:      highest,
-		LowestScore:       lowest,
-		PassCount:         passCount,
-		ScoreDistribution: buckets,
-		Ranking:           ranking,
+		ExamID:      exam.ID,
+		ExamTitle:   exam.Title,
+		AbsentCount: absentCount,
+		Original:    originalSummary,
+		Effective:   effectiveSummary,
+		Ranking:     ranking,
+		RawAttempts: rawRows,
 	}, nil
+}
+
+func (s *StatsService) studentName(ctx context.Context, studentID uint) (string, string) {
+	if user, err := s.repo.FindUserByID(ctx, studentID); err == nil {
+		return user.Name, user.Username
+	}
+	return "", ""
+}
+
+func summarize(attempts []model.ExamAttempt, totalScore float64) dto.StatSummary {
+	SortAttemptsByScore(attempts)
+	summary := dto.StatSummary{
+		Count:        len(attempts),
+		Distribution: buildScoreBuckets(attempts, totalScore),
+	}
+	if len(attempts) == 0 {
+		return summary
+	}
+	sum := 0.0
+	summary.HighestScore = attempts[0].TotalScore
+	summary.LowestScore = attempts[len(attempts)-1].TotalScore
+	for _, a := range attempts {
+		sum += a.TotalScore
+		if totalScore > 0 && a.TotalScore >= totalScore*constants.PassThresholdRatio {
+			summary.PassCount++
+		}
+	}
+	summary.AverageScore = round2(sum / float64(len(attempts)))
+	return summary
 }
 
 func buildScoreBuckets(attempts []model.ExamAttempt, totalScore float64) []dto.ScoreBucket {

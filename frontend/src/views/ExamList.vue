@@ -20,6 +20,7 @@
         <template #default="{ row }">
           <template v-if="isStudent">
             <el-button v-if="row.status === 'published'" type="primary" size="small" @click="$router.push(`/exam/${row.id}/take`)">开始考试</el-button>
+            <el-button v-if="row.status === 'closed'" size="small" @click="openMakeup(row)">补考</el-button>
           </template>
           <template v-else>
             <el-button size="small" @click="viewQuestions(row)">题目</el-button>
@@ -27,6 +28,7 @@
             <el-button v-if="row.status === 'published'" type="warning" size="small" @click="closeExam(row)">关闭</el-button>
             <el-button size="small" @click="viewStats(row)">统计</el-button>
             <el-button size="small" type="info" @click="$router.push(`/grading/${row.id}`)">批改</el-button>
+            <el-button size="small" type="primary" plain @click="$router.push(`/makeup-review?exam_id=${row.id}`)">补考审核</el-button>
             <el-button size="small" type="danger" @click="removeExam(row)">删除</el-button>
           </template>
         </template>
@@ -93,22 +95,89 @@
       </el-table>
     </el-dialog>
 
-    <el-dialog v-model="statsVisible" title="成绩统计" width="800px">
+    <el-dialog v-model="statsVisible" title="成绩统计" width="900px">
       <div v-if="stats">
-        <el-descriptions :column="3" border>
-          <el-descriptions-item label="考试">{{ stats.exam_title }}</el-descriptions-item>
-          <el-descriptions-item label="参与人数">{{ stats.participant_count }}</el-descriptions-item>
-          <el-descriptions-item label="平均分">{{ stats.average_score }}</el-descriptions-item>
-          <el-descriptions-item label="最高分">{{ stats.highest_score }}</el-descriptions-item>
-          <el-descriptions-item label="最低分">{{ stats.lowest_score }}</el-descriptions-item>
-          <el-descriptions-item label="及格人数">{{ stats.pass_count }}</el-descriptions-item>
-        </el-descriptions>
-        <el-table :data="stats.ranking" border style="margin-top: 12px">
-          <el-table-column prop="rank" label="排名" width="80" />
-          <el-table-column prop="student_name" label="姓名" />
-          <el-table-column prop="student_username" label="用户名" />
-          <el-table-column prop="total_score" label="总分" width="100" />
-        </el-table>
+        <el-tabs>
+          <el-tab-pane label="有效成绩（按两次最高）">
+            <el-descriptions :column="3" border>
+              <el-descriptions-item label="考试">{{ stats.exam_title }}</el-descriptions-item>
+              <el-descriptions-item label="有效参与人数">{{ stats.effective.count }}</el-descriptions-item>
+              <el-descriptions-item label="缺考人数">{{ stats.absent_count }}</el-descriptions-item>
+              <el-descriptions-item label="平均分">{{ stats.effective.average_score }}</el-descriptions-item>
+              <el-descriptions-item label="最高分">{{ stats.effective.highest_score }}</el-descriptions-item>
+              <el-descriptions-item label="最低分">{{ stats.effective.lowest_score }}</el-descriptions-item>
+              <el-descriptions-item label="及格人数（≥60%）">{{ stats.effective.pass_count }}</el-descriptions-item>
+            </el-descriptions>
+            <el-table :data="stats.ranking" border style="margin-top: 12px" max-height="300">
+              <el-table-column prop="rank" label="排名" width="70" />
+              <el-table-column prop="student_name" label="姓名" />
+              <el-table-column prop="student_username" label="用户名" />
+              <el-table-column label="类型" width="80">
+                <template #default="{ row }">
+                  <el-tag :type="row.kind === 'makeup' ? 'warning' : 'info'" size="small">{{ row.kind === 'makeup' ? '补考' : '正考' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="total_score" label="有效总分" width="100" />
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane label="原始记录">
+            <el-descriptions :column="3" border>
+              <el-descriptions-item label="原始交卷份数">{{ stats.original.count }}</el-descriptions-item>
+              <el-descriptions-item label="原始平均分">{{ stats.original.average_score }}</el-descriptions-item>
+              <el-descriptions-item label="原始及格份数">{{ stats.original.pass_count }}</el-descriptions-item>
+            </el-descriptions>
+            <el-table :data="stats.raw_attempts" border style="margin-top: 12px" max-height="300">
+              <el-table-column prop="attempt_id" label="记录ID" width="80" />
+              <el-table-column prop="student_name" label="姓名" />
+              <el-table-column prop="student_username" label="用户名" />
+              <el-table-column label="类型" width="80">
+                <template #default="{ row }">
+                  <el-tag :type="row.kind === 'makeup' ? 'warning' : 'info'" size="small">{{ row.kind === 'makeup' ? '补考' : '正考' }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="90">
+                <template #default="{ row }">
+                  <el-tag :type="rawStatusTag[row.status]" size="small">{{ rawStatusLabel[row.status] }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="total_score" label="卷面总分" width="90" />
+              <el-table-column label="是否有效" width="100">
+                <template #default="{ row }">
+                  <el-tag v-if="row.is_effective" type="success" size="small">有效</el-tag>
+                  <span v-else class="muted">否</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="makeupVisible" title="补考申请" width="520px">
+      <div v-loading="makeupLoading">
+        <el-alert v-if="makeupInfo" :title="makeupInfo.reason" :type="makeupInfo.eligible ? 'success' : 'info'" :closable="false" show-icon style="margin-bottom: 12px" />
+        <template v-if="makeupInfo?.application">
+          <el-descriptions :column="1" border>
+            <el-descriptions-item label="审批状态">
+              <el-tag :type="makeupStatusTag[makeupInfo.application.status]">{{ makeupStatusLabel[makeupInfo.application.status] }}</el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="申请理由">{{ makeupInfo.application.reason || '-' }}</el-descriptions-item>
+            <el-descriptions-item v-if="makeupInfo.application.review_remark" label="审批备注">{{ makeupInfo.application.review_remark }}</el-descriptions-item>
+          </el-descriptions>
+          <div style="margin-top: 14px; text-align: right">
+            <el-button
+              v-if="makeupInfo.application.status === 'approved'"
+              type="primary"
+              @click="startMakeup"
+            >进入 / 继续补考</el-button>
+          </div>
+        </template>
+        <template v-else>
+          <el-input v-model="makeupReason" type="textarea" :rows="3" placeholder="请填写补考理由（选填）" />
+          <div style="margin-top: 14px; text-align: right">
+            <el-button type="primary" :disabled="!makeupInfo?.eligible" :loading="makeupSaving" @click="submitMakeup">提交申请</el-button>
+          </div>
+        </template>
       </div>
     </el-dialog>
   </div>
@@ -116,11 +185,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { examApi } from '../api'
+import { examApi, makeupApi } from '../api'
 import { useAuthStore } from '../stores/auth'
-import type { Exam, PaperQuestionConfig, ExamStatResponse } from '../types'
+import type { Exam, PaperQuestionConfig, ExamStatResponse, MakeupEligibility } from '../types'
 
+const router = useRouter()
 const typeLabels: Record<string, string> = {
   single: '单选题',
   multiple: '多选题',
@@ -131,6 +202,10 @@ const typeLabels: Record<string, string> = {
 const difficultyLabels: Record<string, string> = { easy: '简单', medium: '中等', hard: '困难' }
 const statusLabels: Record<string, string> = { draft: '草稿', published: '已发布', closed: '已关闭' }
 const statusTag: Record<string, string> = { draft: 'info', published: 'success', closed: 'warning' }
+const rawStatusLabel: Record<string, string> = { in_progress: '进行中', submitted: '已交卷', absent: '缺考' }
+const rawStatusTag: Record<string, string> = { in_progress: 'warning', submitted: 'success', absent: 'danger' }
+const makeupStatusLabel: Record<string, string> = { pending: '待审批', approved: '已批准', rejected: '已驳回' }
+const makeupStatusTag: Record<string, string> = { pending: 'warning', approved: 'success', rejected: 'danger' }
 
 const auth = useAuthStore()
 const isStudent = computed(() => auth.role === 'student')
@@ -146,6 +221,13 @@ const statsVisible = ref(false)
 const questions = ref<{ id: number; score: number; question: { type: string; content: string; analysis?: string } }[]>([])
 const stats = ref<ExamStatResponse | null>(null)
 const query = reactive({ page: 1, page_size: 10, status: '', keyword: '' })
+
+const makeupVisible = ref(false)
+const makeupLoading = ref(false)
+const makeupSaving = ref(false)
+const makeupInfo = ref<MakeupEligibility | null>(null)
+const makeupReason = ref('')
+const makeupExamId = ref(0)
 
 const form = reactive({
   title: '',
@@ -218,6 +300,35 @@ async function viewStats(row: Exam) {
   statsVisible.value = true
 }
 
+async function openMakeup(row: Exam) {
+  makeupExamId.value = row.id
+  makeupReason.value = ''
+  makeupInfo.value = null
+  makeupVisible.value = true
+  makeupLoading.value = true
+  try {
+    makeupInfo.value = await makeupApi.eligibility(row.id)
+  } finally {
+    makeupLoading.value = false
+  }
+}
+
+async function submitMakeup() {
+  makeupSaving.value = true
+  try {
+    await makeupApi.apply(makeupExamId.value, makeupReason.value)
+    ElMessage.success('补考申请已提交，等待教师审批')
+    makeupInfo.value = await makeupApi.eligibility(makeupExamId.value)
+  } finally {
+    makeupSaving.value = false
+  }
+}
+
+function startMakeup() {
+  makeupVisible.value = false
+  router.push(`/exam/${makeupExamId.value}/take?makeup=1`)
+}
+
 async function load() {
   loading.value = true
   try {
@@ -242,5 +353,9 @@ onMounted(load)
 .pager {
   margin-top: 16px;
   justify-content: flex-end;
+}
+.muted {
+  color: #909399;
+  font-size: 12px;
 }
 </style>

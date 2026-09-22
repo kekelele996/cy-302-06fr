@@ -20,11 +20,11 @@ import (
 // AttemptService handles taking, submitting and grading exams.
 type AttemptService struct {
 	baseService
-	examRepo    ExamRepo
+	examRepo     ExamRepo
 	questionRepo QuestionRepo
-	attemptRepo AttemptRepo
-	answerRepo  AnswerRepo
-	wrongRepo   WrongRepo
+	attemptRepo  AttemptRepo
+	answerRepo   AnswerRepo
+	wrongRepo    WrongRepo
 }
 
 // NewAttemptService constructs AttemptService.
@@ -46,35 +46,64 @@ func NewAttemptService(
 	}
 }
 
-// Start creates or resumes a student attempt with a shuffled paper.
+// Start creates or resumes a student normal attempt with a shuffled paper.
 func (s *AttemptService) Start(ctx context.Context, studentID, examID uint) (*dto.AttemptStartResponse, error) {
+	return s.start(ctx, studentID, examID, constants.AttemptKindNormal)
+}
+
+func (s *AttemptService) start(ctx context.Context, studentID, examID uint, kind string) (*dto.AttemptStartResponse, error) {
 	exam, err := s.examRepo.FindExamByID(ctx, examID)
 	if err != nil {
 		return nil, err
 	}
-	if exam.Status != constants.ExamPublished {
-		return nil, ErrForbidden
-	}
 	now := time.Now()
-	if exam.StartTime != nil && now.Before(*exam.StartTime) {
-		return nil, fmt.Errorf("%w: 考试尚未开始", ErrValidation)
-	}
-	if exam.EndTime != nil && now.After(*exam.EndTime) {
-		return nil, fmt.Errorf("%w: 考试已结束", ErrValidation)
+	if kind == constants.AttemptKindNormal {
+		if exam.Status != constants.ExamPublished {
+			return nil, ErrForbidden
+		}
+		if exam.StartTime != nil && now.Before(*exam.StartTime) {
+			return nil, fmt.Errorf("%w: 考试尚未开始", ErrValidation)
+		}
+		if exam.EndTime != nil && now.After(*exam.EndTime) {
+			return nil, fmt.Errorf("%w: 考试已结束", ErrValidation)
+		}
 	}
 
-	if existing, err := s.attemptRepo.FindInProgressAttempt(ctx, examID, studentID); err == nil {
+	if existing, err := s.attemptRepo.FindInProgressAttemptByKind(ctx, examID, studentID, kind); err == nil {
 		return s.startResponse(ctx, existing, exam)
 	} else if !errors.Is(err, repository.ErrNotFound) {
 		return nil, fmt.Errorf("find in progress attempt: %w", err)
 	}
 
-	items, err := s.examRepo.ListExamQuestions(ctx, examID)
+	orderRaw, optionRaw, err := s.buildShuffledPaper(ctx, examID)
 	if err != nil {
 		return nil, err
 	}
+	attempt := &model.ExamAttempt{
+		ExamID:        examID,
+		StudentID:     studentID,
+		Kind:          kind,
+		Status:        constants.AttemptInProgress,
+		StartedAt:     now,
+		Deadline:      now.Add(time.Duration(exam.DurationMinutes) * time.Minute),
+		QuestionOrder: orderRaw,
+		OptionOrder:   optionRaw,
+	}
+	if err := s.attemptRepo.CreateAttempt(ctx, attempt); err != nil {
+		return nil, err
+	}
+	return s.startResponse(ctx, attempt, exam)
+}
+
+// buildShuffledPaper draws the exam questions and returns randomized question
+// and option orders. Used for both normal and makeup attempts.
+func (s *AttemptService) buildShuffledPaper(ctx context.Context, examID uint) (string, string, error) {
+	items, err := s.examRepo.ListExamQuestions(ctx, examID)
+	if err != nil {
+		return "", "", err
+	}
 	if len(items) == 0 {
-		return nil, fmt.Errorf("%w: 试卷没有题目", ErrValidation)
+		return "", "", fmt.Errorf("%w: 试卷没有题目", ErrValidation)
 	}
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	shuffle(items, rng)
@@ -97,27 +126,84 @@ func (s *AttemptService) Start(ctx context.Context, studentID, examID uint) (*dt
 			optionOrder[it.ID] = keys
 		}
 	}
-
 	orderRaw, _ := json.Marshal(order)
 	optionRaw, _ := json.Marshal(optionOrder)
-	attempt := &model.ExamAttempt{
+	return string(orderRaw), string(optionRaw), nil
+}
+
+// BuildMakeupAttemptModel builds (without persisting) an independent makeup
+// attempt for an approved application. The countdown is not started until the
+// student first opens the paper (activated = false); until then the deadline is
+// kept far in the future so nothing is auto-finalized prematurely. Persistence
+// is performed together with the approval update in one transaction by
+// MakeupApplicationService.
+func (s *AttemptService) BuildMakeupAttemptModel(ctx context.Context, studentID, examID uint) (*model.ExamAttempt, error) {
+	orderRaw, optionRaw, err := s.buildShuffledPaper(ctx, examID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	return &model.ExamAttempt{
 		ExamID:        examID,
 		StudentID:     studentID,
+		Kind:          constants.AttemptKindMakeup,
 		Status:        constants.AttemptInProgress,
 		StartedAt:     now,
-		Deadline:      now.Add(time.Duration(exam.DurationMinutes) * time.Minute),
-		QuestionOrder: string(orderRaw),
-		OptionOrder:   string(optionRaw),
+		Deadline:      now.AddDate(10, 0, 0),
+		QuestionOrder: orderRaw,
+		OptionOrder:   optionRaw,
+		Activated:     false,
+	}, nil
+}
+
+// StartMakeupAttempt resumes the specific makeup attempt bound to an approved
+// application. The first open starts the countdown; later opens resume it.
+func (s *AttemptService) StartMakeupAttempt(ctx context.Context, studentID, attemptID uint) (*dto.AttemptStartResponse, error) {
+	attempt, err := s.attemptRepo.FindAttemptByID(ctx, attemptID)
+	if err != nil {
+		return nil, err
 	}
-	if err := s.attemptRepo.CreateAttempt(ctx, attempt); err != nil {
+	if attempt.StudentID != studentID || attempt.Kind != constants.AttemptKindMakeup {
+		return nil, ErrForbidden
+	}
+	if attempt.Status != constants.AttemptInProgress {
+		return nil, ErrConflict
+	}
+	if !attempt.Activated {
+		exam, err := s.examRepo.FindExamByID(ctx, attempt.ExamID)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now()
+		deadline := now.Add(time.Duration(exam.DurationMinutes) * time.Minute)
+		activated, err := s.attemptRepo.ActivateAttempt(ctx, attemptID, now, deadline)
+		if err != nil {
+			return nil, err
+		}
+		if activated {
+			attempt.StartedAt = now
+			attempt.Deadline = deadline
+			attempt.Activated = true
+		} else {
+			// A concurrent request activated it first: reload to get the
+			// authoritative countdown window.
+			fresh, err := s.attemptRepo.FindAttemptByID(ctx, attemptID)
+			if err != nil {
+				return nil, err
+			}
+			attempt = fresh
+		}
+	}
+	exam, err := s.examRepo.FindExamByID(ctx, attempt.ExamID)
+	if err != nil {
 		return nil, err
 	}
 	return s.startResponse(ctx, attempt, exam)
 }
 
-// Current returns the student's current unfinished attempt.
+// Current returns the student's current unfinished normal attempt.
 func (s *AttemptService) Current(ctx context.Context, studentID, examID uint) (*dto.AttemptStartResponse, error) {
-	attempt, err := s.attemptRepo.FindInProgressAttempt(ctx, examID, studentID)
+	attempt, err := s.attemptRepo.FindInProgressAttemptByKind(ctx, examID, studentID, constants.AttemptKindNormal)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +255,8 @@ func (s *AttemptService) SaveAnswer(ctx context.Context, studentID, attemptID ui
 	return nil
 }
 
-// Submit finalizes an attempt, auto-grades objective questions and collects wrong answers.
+// Submit finalizes an attempt, auto-grades objective questions, and then
+// reconciles the student's wrong-question book against the valid attempt.
 func (s *AttemptService) Submit(ctx context.Context, studentID, attemptID uint) error {
 	attempt, err := s.attemptRepo.FindAttemptByID(ctx, attemptID)
 	if err != nil {
@@ -180,6 +267,14 @@ func (s *AttemptService) Submit(ctx context.Context, studentID, attemptID uint) 
 	}
 	if attempt.Status != constants.AttemptInProgress {
 		return ErrConflict
+	}
+	// An expired, activated attempt is lazily finalized as absent; the student
+	// then cannot submit it. Unactivated makeup attempts are not on a countdown.
+	if attempt.Activated && time.Now().After(attempt.Deadline) {
+		if _, err := s.attemptRepo.FinalizeExpiredAttempt(ctx, attemptID); err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: 考试时间已到，该记录已按缺考处理", ErrValidation)
 	}
 
 	items, err := s.examRepo.ListExamQuestions(ctx, attempt.ExamID)
@@ -196,7 +291,6 @@ func (s *AttemptService) Submit(ctx context.Context, studentID, attemptID uint) 
 	}
 
 	objectiveTotal := 0.0
-	wrongItems := make([]*model.WrongQuestion, 0)
 	now := time.Now()
 	for _, it := range items {
 		q, ok := s.findQuestion(ctx, it.QuestionID)
@@ -216,15 +310,6 @@ func (s *AttemptService) Submit(ctx context.Context, studentID, attemptID uint) 
 			if correct {
 				score = it.Score
 				objectiveTotal += score
-			} else {
-				wrongItems = append(wrongItems, &model.WrongQuestion{
-					StudentID:      studentID,
-					QuestionID:     q.ID,
-					KnowledgePoint: q.KnowledgePoint,
-					WrongCount:     1,
-					LastWrongAt:    now,
-					Status:         constants.WrongUnresolved,
-				})
 			}
 		}
 		saved := &model.Answer{
@@ -249,15 +334,14 @@ func (s *AttemptService) Submit(ctx context.Context, studentID, attemptID uint) 
 	if err := s.attemptRepo.UpdateAttempt(ctx, attempt); err != nil {
 		return fmt.Errorf("update attempt: %w", err)
 	}
-	for _, w := range wrongItems {
-		if err := s.wrongRepo.UpsertWrongQuestion(ctx, w); err != nil {
-			return fmt.Errorf("upsert wrong question: %w", err)
-		}
+	if err := s.reconcileWrongBook(ctx, studentID, attempt.ExamID); err != nil {
+		return fmt.Errorf("reconcile wrong book: %w", err)
 	}
 	return nil
 }
 
-// Grade applies teacher scores to subjective answers.
+// Grade applies teacher scores to subjective answers and reconciles the
+// wrong-question book because grading can change the valid attempt.
 func (s *AttemptService) Grade(ctx context.Context, teacherID uint, role string, attemptID uint, req dto.GradeRequest) error {
 	attempt, err := s.attemptRepo.FindAttemptByID(ctx, attemptID)
 	if err != nil {
@@ -328,6 +412,9 @@ func (s *AttemptService) Grade(ctx context.Context, teacherID uint, role string,
 	if err := s.attemptRepo.UpdateAttempt(ctx, attempt); err != nil {
 		return fmt.Errorf("update attempt: %w", err)
 	}
+	if err := s.reconcileWrongBook(ctx, attempt.StudentID, attempt.ExamID); err != nil {
+		return fmt.Errorf("reconcile wrong book: %w", err)
+	}
 	return nil
 }
 
@@ -352,10 +439,12 @@ func (s *AttemptService) Detail(ctx context.Context, role string, userID, attemp
 	if err != nil {
 		return nil, err
 	}
-	return &dto.AttemptDetail{
+	best := s.effectiveForStudent(ctx, attempt.ExamID, attempt.StudentID)
+	resp := &dto.AttemptDetail{
 		AttemptID:      attempt.ID,
 		ExamID:         exam.ID,
 		ExamTitle:      exam.Title,
+		Kind:           attempt.Kind,
 		Status:         attempt.Status,
 		ObjectiveScore: attempt.ObjectiveScore,
 		TotalScore:     attempt.TotalScore,
@@ -363,7 +452,9 @@ func (s *AttemptService) Detail(ctx context.Context, role string, userID, attemp
 		SubmittedAt:    attempt.SubmittedAt,
 		Deadline:       attempt.Deadline,
 		Questions:      details,
-	}, nil
+	}
+	s.fillEffective(resp, attempt, best)
+	return resp, nil
 }
 
 // List returns the student's attempt history.
@@ -380,21 +471,25 @@ func (s *AttemptService) List(ctx context.Context, studentID uint, query dto.Att
 		if examErr == nil {
 			title = exam.Title
 		}
-		items = append(items, dto.AttemptSummary{
+		best := s.effectiveForStudent(ctx, attempts[i].ExamID, studentID)
+		summary := dto.AttemptSummary{
 			AttemptID:      attempts[i].ID,
 			ExamID:         attempts[i].ExamID,
 			ExamTitle:      title,
+			Kind:           attempts[i].Kind,
 			Status:         attempts[i].Status,
 			ObjectiveScore: attempts[i].ObjectiveScore,
 			TotalScore:     attempts[i].TotalScore,
 			StartedAt:      attempts[i].StartedAt,
 			SubmittedAt:    attempts[i].SubmittedAt,
-		})
+		}
+		s.fillSummaryEffective(&summary, &attempts[i], best)
+		items = append(items, summary)
 	}
 	return dto.PageResult{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
-// Report builds score analysis with ranking.
+// Report builds score analysis with ranking based on effective (best-of-two) scores.
 func (s *AttemptService) Report(ctx context.Context, role string, userID, attemptID uint) (*dto.ReportResponse, error) {
 	attempt, err := s.attemptRepo.FindAttemptByID(ctx, attemptID)
 	if err != nil {
@@ -483,13 +578,15 @@ func (s *AttemptService) Report(ctx context.Context, role string, userID, attemp
 	if objectiveCount > 0 {
 		accuracy = float64(objectiveCorrect) / float64(objectiveCount) * 100
 	}
-	rank, participants := s.ranking(ctx, attempt)
+	rank, participants := s.effectiveRanking(ctx, attempt)
 
 	subjectiveScore := attempt.TotalScore - attempt.ObjectiveScore
-	return &dto.ReportResponse{
+	best := s.effectiveForStudent(ctx, attempt.ExamID, attempt.StudentID)
+	resp := &dto.ReportResponse{
 		AttemptID:       attempt.ID,
 		ExamID:          exam.ID,
 		ExamTitle:       exam.Title,
+		Kind:            attempt.Kind,
 		TotalScore:      attempt.TotalScore,
 		ObjectiveScore:  attempt.ObjectiveScore,
 		SubjectiveScore: subjectiveScore,
@@ -498,7 +595,16 @@ func (s *AttemptService) Report(ctx context.Context, role string, userID, attemp
 		Participants:    participants,
 		TypeBreakdown:   breakdown,
 		SubmittedAt:     attempt.SubmittedAt,
-	}, nil
+	}
+	if best != nil {
+		resp.EffectiveScore = best.TotalScore
+		resp.IsEffective = best.ID == attempt.ID
+		resp.EffectiveKind = best.Kind
+		resp.EffectiveAttemptID = best.ID
+	} else {
+		resp.EffectiveScore = attempt.TotalScore
+	}
+	return resp, nil
 }
 
 // ListGrading returns submitted attempts of an exam for teacher grading.
@@ -514,21 +620,27 @@ func (s *AttemptService) ListGrading(ctx context.Context, role string, userID, e
 	if err != nil {
 		return nil, err
 	}
+	effective := EffectiveAttempts(attempts)
 	result := make([]dto.AttemptSummary, 0, len(attempts))
 	for i := range attempts {
 		if attempts[i].Status != constants.AttemptSubmitted {
 			continue
 		}
-		result = append(result, dto.AttemptSummary{
+		summary := dto.AttemptSummary{
 			AttemptID:      attempts[i].ID,
 			ExamID:         attempts[i].ExamID,
 			ExamTitle:      exam.Title,
+			Kind:           attempts[i].Kind,
 			Status:         attempts[i].Status,
 			ObjectiveScore: attempts[i].ObjectiveScore,
 			TotalScore:     attempts[i].TotalScore,
 			StartedAt:      attempts[i].StartedAt,
 			SubmittedAt:    attempts[i].SubmittedAt,
-		})
+		}
+		if row, ok := effective[attempts[i].StudentID]; ok {
+			s.fillSummaryEffective(&summary, &attempts[i], row.Attempt)
+		}
+		result = append(result, summary)
 	}
 	return result, nil
 }
@@ -628,6 +740,7 @@ func (s *AttemptService) startResponse(ctx context.Context, attempt *model.ExamA
 		AttemptID:       attempt.ID,
 		ExamID:          exam.ID,
 		Title:           exam.Title,
+		Kind:            attempt.Kind,
 		DurationMinutes: exam.DurationMinutes,
 		TotalScore:      exam.TotalScore,
 		StartedAt:       attempt.StartedAt,
@@ -666,29 +779,155 @@ func (s *AttemptService) questionTypeByAnswer(ctx context.Context, a model.Answe
 	return q.Type, ObjectiveQuestionTypes()[q.Type]
 }
 
-func (s *AttemptService) ranking(ctx context.Context, attempt *model.ExamAttempt) (int, int) {
+// effectiveForStudent returns the student's valid (highest-scoring submitted)
+// attempt for an exam.
+func (s *AttemptService) effectiveForStudent(ctx context.Context, examID, studentID uint) *model.ExamAttempt {
+	attempts, err := s.attemptRepo.ListAttemptsByStudentAndExam(ctx, examID, studentID)
+	if err != nil {
+		return nil
+	}
+	return BestSubmittedAttempt(attempts)
+}
+
+func (s *AttemptService) fillSummaryEffective(summary *dto.AttemptSummary, current, best *model.ExamAttempt) {
+	if best == nil {
+		summary.EffectiveScore = current.TotalScore
+		summary.IsEffective = false
+		return
+	}
+	summary.EffectiveScore = best.TotalScore
+	summary.IsEffective = best.ID == current.ID
+}
+
+func (s *AttemptService) fillEffective(resp *dto.AttemptDetail, current, best *model.ExamAttempt) {
+	if best == nil {
+		resp.EffectiveScore = current.TotalScore
+		resp.IsEffective = false
+		return
+	}
+	resp.EffectiveScore = best.TotalScore
+	resp.IsEffective = best.ID == current.ID
+}
+
+// effectiveRanking ranks the student among per-student effective attempts.
+// Absent students are not participants.
+func (s *AttemptService) effectiveRanking(ctx context.Context, attempt *model.ExamAttempt) (int, int) {
 	attempts, err := s.attemptRepo.ListAttemptsByExam(ctx, attempt.ExamID)
 	if err != nil {
 		return 0, 0
 	}
-	submitted := make([]model.ExamAttempt, 0, len(attempts))
-	for _, a := range attempts {
-		if a.Status == constants.AttemptSubmitted {
-			submitted = append(submitted, a)
+	rows := EffectiveAttempts(attempts)
+	effective := make([]model.ExamAttempt, 0, len(rows))
+	for _, row := range rows {
+		if row.Attempt != nil {
+			effective = append(effective, *row.Attempt)
 		}
 	}
-	sort.Slice(submitted, func(i, j int) bool {
-		if submitted[i].TotalScore != submitted[j].TotalScore {
-			return submitted[i].TotalScore > submitted[j].TotalScore
-		}
-		return submitted[i].SubmittedAt.Before(*submitted[j].SubmittedAt)
-	})
-	for i, a := range submitted {
-		if a.ID == attempt.ID {
-			return i + 1, len(submitted)
+	SortAttemptsByScore(effective)
+	best := s.effectiveForStudent(ctx, attempt.ExamID, attempt.StudentID)
+	rank := 0
+	if best != nil {
+		for i, a := range effective {
+			if a.ID == best.ID {
+				rank = i + 1
+				break
+			}
 		}
 	}
-	return 0, len(submitted)
+	return rank, len(effective)
+}
+
+// reconcileWrongBook makes the student's wrong-question entries for the exam's
+// questions match exactly the wrong objective answers of their current valid
+// (highest-scoring) attempt for the exam.
+func (s *AttemptService) reconcileWrongBook(ctx context.Context, studentID, examID uint) error {
+	attempts, err := s.attemptRepo.ListAttemptsByStudentAndExam(ctx, examID, studentID)
+	if err != nil {
+		return err
+	}
+	best := BestSubmittedAttempt(attempts)
+	if best == nil {
+		return nil
+	}
+	items, err := s.examRepo.ListExamQuestions(ctx, examID)
+	if err != nil {
+		return err
+	}
+	answers, err := s.answerRepo.ListAnswersByAttempt(ctx, best.ID)
+	if err != nil {
+		return err
+	}
+	answerMap := make(map[uint]model.Answer, len(answers))
+	for _, a := range answers {
+		answerMap[a.ExamQuestionID] = a
+	}
+
+	now := time.Now()
+	examQuestionIDs := make(map[uint]struct{}, len(items))
+	wrongSet := make(map[uint]model.ExamQuestion)
+	for _, it := range items {
+		examQuestionIDs[it.QuestionID] = struct{}{}
+		q, ok := s.findQuestion(ctx, it.QuestionID)
+		if !ok || !ObjectiveQuestionTypes()[q.Type] {
+			continue
+		}
+		a, answered := answerMap[it.ID]
+		if !answered || a.IsCorrect == nil || *a.IsCorrect {
+			continue
+		}
+		wrongSet[q.ID] = it
+	}
+
+	records, _, err := s.wrongRepo.ListWrongQuestions(ctx, studentID, "", 1, 1000)
+	if err != nil {
+		return err
+	}
+	existing := make(map[uint]model.WrongQuestion)
+	for _, r := range records {
+		existing[r.QuestionID] = r
+	}
+
+	for qID := range wrongSet {
+		q, ok := s.findQuestion(ctx, qID)
+		if !ok {
+			continue
+		}
+		if _, present := existing[qID]; present {
+			continue
+		}
+		w := &model.WrongQuestion{
+			StudentID:      studentID,
+			QuestionID:     qID,
+			KnowledgePoint: q.KnowledgePoint,
+			WrongCount:     1,
+			LastWrongAt:    now,
+			Status:         constants.WrongUnresolved,
+		}
+		if err := s.wrongRepo.UpsertWrongQuestion(ctx, w); err != nil {
+			return fmt.Errorf("upsert wrong question: %w", err)
+		}
+	}
+
+	// Remove wrong entries for exam questions that the valid attempt answered
+	// correctly, unless the question is still wrong in another submitted attempt.
+	for _, r := range records {
+		if _, stillWrong := wrongSet[r.QuestionID]; stillWrong {
+			continue
+		}
+		if _, belongs := examQuestionIDs[r.QuestionID]; !belongs {
+			continue
+		}
+		other, err := s.answerRepo.HasOtherSubmittedWrongAnswer(ctx, studentID, r.QuestionID, best.ID)
+		if err != nil {
+			return err
+		}
+		if !other {
+			if err := s.wrongRepo.DeleteWrongQuestion(ctx, r.ID, studentID); err != nil && !errors.Is(err, repository.ErrNotFound) {
+				return fmt.Errorf("delete reconciled wrong question: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func parseOrder(raw string) []uint {

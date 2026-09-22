@@ -78,11 +78,12 @@ func (s *Server) CloseExam(c *gin.Context) {
 		httpx.Fail(c, http.StatusUnprocessableEntity, constants.CodeValidation, "考试 ID 不合法")
 		return
 	}
-	if err := s.exams.Close(c.Request.Context(), middleware.Role(c), middleware.UserID(c), uint(id)); err != nil {
+	absentCount, err := s.exams.Close(c.Request.Context(), middleware.Role(c), middleware.UserID(c), uint(id))
+	if err != nil {
 		s.respondError(c, err)
 		return
 	}
-	httpx.OK(c, gin.H{"message": "已关闭"})
+	httpx.OK(c, gin.H{"message": "已关闭", "absent_count": absentCount})
 }
 
 // DeleteExam handles DELETE /exams/:id.

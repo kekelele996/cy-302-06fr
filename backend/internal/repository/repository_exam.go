@@ -12,6 +12,7 @@ import (
 // ExamFilter holds optional filters for exam list queries.
 type ExamFilter struct {
 	Status    string
+	Statuses  []string
 	Keyword   string
 	CreatedBy uint
 }
@@ -76,6 +77,9 @@ func (r *Repository) ListExams(ctx context.Context, filter ExamFilter, page, pag
 	q := r.db.WithContext(ctx).Model(&model.Exam{})
 	if filter.Status != "" {
 		q = q.Where("status = ?", filter.Status)
+	}
+	if len(filter.Statuses) > 0 {
+		q = q.Where("status IN ?", filter.Statuses)
 	}
 	if filter.Keyword != "" {
 		q = q.Where("title LIKE ?", "%"+filter.Keyword+"%")

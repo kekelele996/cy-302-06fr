@@ -193,3 +193,139 @@ paths:
       responses:
         '201':
           description: 创建成功
+  /api/v1/exams/{id}/close:
+    post:
+      summary: 关闭考试（未交卷的正考记录自动记为缺考）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 已关闭，返回本次标记为缺考的记录数 absent_count
+  /api/v1/exams/{id}/makeup/eligibility:
+    get:
+      summary: 学生查询补考资格与申请状态
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 补考资格（eligible/reason/application）
+  /api/v1/exams/{id}/makeup/applications:
+    post:
+      summary: 学生提交一次补考申请（重复/并发申请只成功一次）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '201':
+          description: 申请已创建（status=pending）
+        '409':
+          description: 已有待审申请、补考进行中或申请已处理
+  /api/v1/exams/{id}/makeup/attempts:
+    post:
+      summary: 批准后进入/继续独立补考（首次进入开始倒计时）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '201':
+          description: 返回随机排序的补考试卷
+        '422':
+          description: 补考申请尚未批准
+  /api/v1/makeup-applications:
+    get:
+      summary: 教师/管理员分页查询补考申请
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: exam_id
+          schema:
+            type: integer
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, approved, rejected]
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 申请分页列表
+  /api/v1/makeup-applications/{id}/approve:
+    post:
+      summary: 批准补考并生成独立补考记录（并发/重复批准只成功一次）
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 已批准并生成 makeup 类型的答题记录
+        '409':
+          description: 申请已处理
+  /api/v1/makeup-applications/{id}/reject:
+    post:
+      summary: 驳回补考申请
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                remark:
+                  type: string
+      responses:
+        '200':
+          description: 已驳回
+        '409':
+          description: 申请已处理

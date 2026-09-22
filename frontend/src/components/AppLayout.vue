@@ -12,6 +12,9 @@
         <el-menu-item index="/exams">
           <el-icon><Tickets /></el-icon><span>考试管理</span>
         </el-menu-item>
+        <el-menu-item v-if="isStaff" index="/makeup-review">
+          <el-icon><CircleCheck /></el-icon><span>补考审核</span>
+        </el-menu-item>
         <el-menu-item v-if="isStudent" index="/attempts">
           <el-icon><Document /></el-icon><span>考试记录</span>
         </el-menu-item>

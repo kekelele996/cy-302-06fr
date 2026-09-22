@@ -16,6 +16,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'attempts', name: 'attempts', component: () => import('../views/MyAttempts.vue'), meta: { roles: ['student'] } },
       { path: 'report/:attemptId', name: 'report', component: () => import('../views/ExamReport.vue') },
       { path: 'grading/:examId', name: 'grading', component: () => import('../views/Grading.vue'), meta: { roles: ['admin', 'teacher'] } },
+      { path: 'makeup-review', name: 'makeup-review', component: () => import('../views/MakeupReview.vue'), meta: { roles: ['admin', 'teacher'] } },
       { path: 'wrong', name: 'wrong', component: () => import('../views/WrongBook.vue'), meta: { roles: ['student'] } },
       { path: 'users', name: 'users', component: () => import('../views/Users.vue'), meta: { roles: ['admin'] } }
     ]

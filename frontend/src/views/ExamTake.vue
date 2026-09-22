@@ -1,7 +1,10 @@
 <template>
   <div class="exam-page no-select" @contextmenu.prevent>
     <header class="exam-header">
-      <div class="exam-title">{{ paper.title }}</div>
+      <div class="exam-title">
+        {{ paper.title }}
+        <el-tag v-if="isMakeup" type="warning" effect="dark" style="margin-left: 10px">补考</el-tag>
+      </div>
       <div class="exam-countdown">剩余时间：{{ countdownText }}</div>
       <el-button type="warning" @click="onSubmit">交卷</el-button>
     </header>
@@ -74,16 +77,18 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { attemptApi } from '../api'
+import { attemptApi, makeupApi } from '../api'
 import type { AttemptStartResponse, ExamQuestionView, QuestionType } from '../types'
 
 const route = useRoute()
 const router = useRouter()
 const examId = Number(route.params.id)
+const isMakeup = route.query.makeup === '1'
 const paper = reactive<AttemptStartResponse>({
   attempt_id: 0,
   exam_id: examId,
   title: '',
+  kind: isMakeup ? 'makeup' : 'normal',
   duration_minutes: 0,
   total_score: 0,
   started_at: '',
@@ -241,7 +246,7 @@ function tick() {
 }
 
 async function load() {
-  const res = await attemptApi.start(examId)
+  const res = isMakeup ? await makeupApi.start(examId) : await attemptApi.start(examId)
   Object.assign(paper, res)
   res.questions.forEach((q: ExamQuestionView) => {
     if (q.answer !== undefined && q.answer !== null && q.answer !== '') {

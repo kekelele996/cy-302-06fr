@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS exam_attempts (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     exam_id BIGINT UNSIGNED NOT NULL,
     student_id BIGINT UNSIGNED NOT NULL,
+    kind VARCHAR(16) NOT NULL DEFAULT 'normal',
     status VARCHAR(16) NOT NULL DEFAULT 'in_progress',
     started_at DATETIME(3) NULL,
     submitted_at DATETIME(3) NULL,
@@ -75,11 +76,13 @@ CREATE TABLE IF NOT EXISTS exam_attempts (
     option_order TEXT,
     objective_score DOUBLE NOT NULL DEFAULT 0,
     total_score DOUBLE NOT NULL DEFAULT 0,
+    activated TINYINT(1) NOT NULL DEFAULT 1,
     created_at DATETIME(3) NULL,
     updated_at DATETIME(3) NULL,
     PRIMARY KEY (id),
     KEY idx_exam_attempts_exam_id (exam_id),
-    KEY idx_exam_attempts_student_id (student_id)
+    KEY idx_exam_attempts_student_id (student_id),
+    KEY idx_attempt_exam_student (exam_id, student_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS answers (
@@ -112,4 +115,22 @@ CREATE TABLE IF NOT EXISTS wrong_questions (
     PRIMARY KEY (id),
     KEY idx_wrong_questions_student_id (student_id),
     KEY idx_wrong_questions_question_id (question_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS makeup_applications (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    exam_id BIGINT UNSIGNED NOT NULL,
+    student_id BIGINT UNSIGNED NOT NULL,
+    reason VARCHAR(500) NOT NULL DEFAULT '',
+    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+    review_remark VARCHAR(500) NOT NULL DEFAULT '',
+    reviewed_by BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    reviewed_at DATETIME(3) NULL,
+    makeup_attempt_id BIGINT UNSIGNED NULL,
+    created_at DATETIME(3) NULL,
+    updated_at DATETIME(3) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uniq_makeup_exam_student (exam_id, student_id),
+    KEY idx_makeup_applications_status (status),
+    KEY idx_makeup_applications_attempt (makeup_attempt_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

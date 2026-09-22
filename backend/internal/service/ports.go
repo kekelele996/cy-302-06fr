@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/gbexam/online-exam/internal/model"
 	"github.com/gbexam/online-exam/internal/repository"
@@ -38,6 +39,7 @@ type ExamRepo interface {
 	ReplaceExamQuestions(ctx context.Context, examID uint, items []model.ExamQuestion) error
 	ListExamQuestions(ctx context.Context, examID uint) ([]model.ExamQuestion, error)
 	CountExamQuestions(ctx context.Context, examID uint) (int64, error)
+	CloseExamAndMarkAbsent(ctx context.Context, examID uint) (int64, error)
 }
 
 // AttemptRepo is the attempt persistence contract.
@@ -45,8 +47,11 @@ type AttemptRepo interface {
 	CreateAttempt(ctx context.Context, a *model.ExamAttempt) error
 	FindAttemptByID(ctx context.Context, id uint) (*model.ExamAttempt, error)
 	UpdateAttempt(ctx context.Context, a *model.ExamAttempt) error
-	FindInProgressAttempt(ctx context.Context, examID, studentID uint) (*model.ExamAttempt, error)
+	FindInProgressAttemptByKind(ctx context.Context, examID, studentID uint, kind string) (*model.ExamAttempt, error)
+	ActivateAttempt(ctx context.Context, id uint, startedAt, deadline time.Time) (bool, error)
+	FinalizeExpiredAttempt(ctx context.Context, id uint) (bool, error)
 	ListAttemptsByStudent(ctx context.Context, studentID, examID uint, page, pageSize int) ([]model.ExamAttempt, int64, error)
+	ListAttemptsByStudentAndExam(ctx context.Context, examID, studentID uint) ([]model.ExamAttempt, error)
 	ListAttemptsByExam(ctx context.Context, examID uint) ([]model.ExamAttempt, error)
 }
 
@@ -54,6 +59,17 @@ type AttemptRepo interface {
 type AnswerRepo interface {
 	SaveAnswer(ctx context.Context, answer *model.Answer) error
 	ListAnswersByAttempt(ctx context.Context, attemptID uint) ([]model.Answer, error)
+	HasOtherSubmittedWrongAnswer(ctx context.Context, studentID, questionID, excludeAttemptID uint) (bool, error)
+}
+
+// MakeupRepo is the makeup application persistence contract.
+type MakeupRepo interface {
+	CreateMakeupApplication(ctx context.Context, a *model.MakeupApplication) error
+	FindMakeupApplication(ctx context.Context, examID, studentID uint) (*model.MakeupApplication, error)
+	FindMakeupApplicationByID(ctx context.Context, id uint) (*model.MakeupApplication, error)
+	ListMakeupApplications(ctx context.Context, examID uint, status string, page, pageSize int) ([]model.MakeupApplication, int64, error)
+	ApproveMakeupWithAttempt(ctx context.Context, appID, reviewerID, studentID, examID uint, attempt *model.ExamAttempt) error
+	RejectMakeupApplication(ctx context.Context, id, reviewerID uint, remark string) error
 }
 
 // WrongRepo is the wrong-question persistence contract.

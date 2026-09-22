@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/gbexam/online-exam/internal/constants"
 	"github.com/gbexam/online-exam/internal/model"
 )
 
@@ -39,4 +40,20 @@ func (r *Repository) ListAnswersByAttempt(ctx context.Context, attemptID uint) (
 		return nil, fmt.Errorf("list answers: %w", err)
 	}
 	return items, nil
+}
+
+// HasOtherSubmittedWrongAnswer reports whether the student has the question
+// marked wrong (is_correct = false) in any other submitted attempt.
+func (r *Repository) HasOtherSubmittedWrongAnswer(ctx context.Context, studentID, questionID, excludeAttemptID uint) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&model.Answer{}).
+		Joins("JOIN exam_attempts ON exam_attempts.id = answers.attempt_id").
+		Where("answers.question_id = ? AND answers.attempt_id <> ?", questionID, excludeAttemptID).
+		Where("answers.is_correct = 0").
+		Where("exam_attempts.student_id = ? AND exam_attempts.status = ?", studentID, constants.AttemptSubmitted).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("count other wrong answers: %w", err)
+	}
+	return count > 0, nil
 }
